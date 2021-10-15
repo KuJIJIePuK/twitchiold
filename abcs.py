@@ -3,7 +3,7 @@
 """
 The MIT License (MIT)
 
-Copyright (c) 2017-2019 TwitchIO
+Copyright (c) 2017-2021 TwitchIO
 
 Permission is hereby granted, free of charge, to any person obtaining a
 copy of this software and associated documentation files (the "Software"),
@@ -26,7 +26,7 @@ DEALINGS IN THE SOFTWARE.
 
 import abc
 import time
-
+import asyncio
 from .cooldowns import RateBucket
 from .errors import *
 
@@ -62,9 +62,9 @@ class Messageable(metaclass=abc.ABCMeta):
 
     __slots__ = ()
 
-    __invalid__ = ('ban', 'unban', 'timeout', 'w', 'colour', 'color', 'mod',
+    __invalid__ = ('ban', 'unban', 'timeout', 'untimeout', 'w', 'colour', 'color', 'mod',
                    'unmod', 'clear', 'subscribers', 'subscriberoff', 'slow', 'slowoff',
-                   'r9k', 'r9koff', 'emoteonly', 'emoteonlyoff', 'host', 'unhost','whis')
+                   'r9k', 'r9koff', 'emoteonly', 'whis', 'emoteonlyoff', 'host', 'unhost', 'followers', 'followersoff')
 
     @abc.abstractmethod
     def _get_channel(self):
@@ -158,10 +158,27 @@ class Messageable(metaclass=abc.ABCMeta):
         self.check_bucket(channel)
 
         await ws.send_privmsg(channel, content=f'.clear')
+    
+    async def whis(self,touser = 'kujijibot',mes = '',delay = 0):
+        if mes!='':
+            ws = self._get_socket
+            channel, _ = self._get_channel()
 
-    #   .followersoff
+            self.check_bucket(channel)
+            await asyncio.sleep(delay)
+            await ws.send_privmsg(channel, content=f'.w {touser} {mes}')
 
-    async def followers(self,time: str=''):
+    async def disconnect(self, delay = 0):
+        if mes!='':
+            ws = self._get_socket
+            channel, _ = self._get_channel()
+
+            self.check_bucket(channel)
+            await asyncio.sleep(delay)
+            await ws.send_privmsg(channel, content=f'.disconnect')
+    
+
+    async def emoteonly(self,delay = 0):
         """|coro|
 
         Method which sends a .slow to Twitch and sets the channel to slowmode.
@@ -171,18 +188,71 @@ class Messageable(metaclass=abc.ABCMeta):
         channel, _ = self._get_channel()
 
         self.check_bucket(channel)
+        await asyncio.sleep(delay)
+        await ws.send_privmsg(channel, content=f'.emoteonly')
+    async def emoteonlyoff(self,delay = 0):
+        """|coro|
 
+        Method which sends a .slow to Twitch and sets the channel to slowmode.
+        """
+
+        ws = self._get_socket
+        channel, _ = self._get_channel()
+
+        self.check_bucket(channel)
+        await asyncio.sleep(delay)
+        await ws.send_privmsg(channel, content=f'.emoteonlyoff')
+
+    async def subscribers(self,delay = 0):
+        """|coro|
+
+        Method which sends a .slow to Twitch and sets the channel to slowmode.
+        """
+
+        ws = self._get_socket
+        channel, _ = self._get_channel()
+
+        self.check_bucket(channel)
+        await asyncio.sleep(delay)
+        await ws.send_privmsg(channel, content=f'.subscribers')
+
+
+    async def subscribersoff(self,delay = 0):
+        """|coro|
+
+        Method which sends a .slow to Twitch and sets the channel to slowmode.
+        """
+
+        ws = self._get_socket
+        channel, _ = self._get_channel()
+
+        self.check_bucket(channel)
+        await asyncio.sleep(delay)
+        await ws.send_privmsg(channel, content=f'.subscribersoff')
+
+
+
+    async def followers(self,time = 0,delay = 0):
+        """|coro|
+
+        Method which sends a .slow to Twitch and sets the channel to slowmode.
+        """
+
+        ws = self._get_socket
+        channel, _ = self._get_channel()
+
+        self.check_bucket(channel)
+        await asyncio.sleep(delay)
         await ws.send_privmsg(channel, content=f'.followers {time}')
 
-    async def followersoff(self):
+    async def followersoff(self,delay = 0):
         
         ws = self._get_socket
         channel, _ = self._get_channel()
 
         self.check_bucket(channel)
-
+        await asyncio.sleep(delay)
         await ws.send_privmsg(channel, content=f'.followersoff')
-
 
     async def slow(self):
         """|coro|
@@ -239,7 +309,23 @@ class Messageable(metaclass=abc.ABCMeta):
 
         await ws.send_privmsg(channel, content=f'.timeout {user} {duration} {reason}')
 
+    async def untimeout(self, user: str):
 
+        ws = self._get_socket
+        channel, _ = self._get_channel()
+
+        self.check_bucket(channel)
+
+        await ws.send_privmsg(channel, content=f'.untimeout {user}')
+
+    async def delete(self, id: str):
+
+        ws = self._get_socket
+        channel, _ = self._get_channel()
+
+        self.check_bucket(channel)
+
+        await ws.send_privmsg(channel, content=f'.delete {id}')
     async def ban(self, user: str, reason: str=''):
         """|coro|
 
@@ -259,15 +345,6 @@ class Messageable(metaclass=abc.ABCMeta):
         self.check_bucket(channel)
 
         await ws.send_privmsg(channel, content=f'.ban {user} {reason}')
-
-    async def whis(self, user: str, mess: str=''):
-
-        ws = self._get_socket
-        channel, _ = self._get_channel()
-
-        self.check_bucket(channel)
-
-        await ws.send_privmsg(channel, content=f'.w {user} {mess}')
 
     async def unban(self, user: str):
         """|coro|

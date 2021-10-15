@@ -3,7 +3,7 @@
 """
 The MIT License (MIT)
 
-Copyright (c) 2017-2019 TwitchIO
+Copyright (c) 2017-2021 TwitchIO
 
 Permission is hereby granted, free of charge, to any person obtaining a
 copy of this software and associated documentation files (the "Software"),
@@ -42,7 +42,7 @@ import uuid
 
 from aiohttp import web
 
-from twitchio.errors import HTTPException
+from twitchiold.errors import HTTPException
 
 
 class TwitchWebhookServer:

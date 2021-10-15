@@ -3,7 +3,7 @@
 """
 The MIT License (MIT)
 
-Copyright (c) 2017-2019 TwitchIO
+Copyright (c) 2017-2021 TwitchIO
 
 Permission is hereby granted, free of charge, to any person obtaining a
 copy of this software and associated documentation files (the "Software"),
@@ -112,7 +112,7 @@ class WebsocketConnection:
                 r"^(?:@(?P<tags>\S+)\s)?:(?P<data>\S+)(?:\s)"
                 r"(?P<action>[A-Z()-]+)(?:\s#)(?P<channel>\S+)"
                 r"(?:\s(?::)?(?P<content>.+))?"),
-
+            
             "reward":re.compile("custom-reward-id=(\S+);"),
 
             "ping": re.compile("PING (?P<content>.+)"),
@@ -270,8 +270,19 @@ class WebsocketConnection:
         *channels : str
             An argument list of channels to attempt joining.
         """
-
-        await asyncio.gather(*[self._join_channel(x) for x in channels])
+        if len(channels)>20:
+            i = 0
+            while i*20<len(channels):
+                if i*20+20<len(channels):
+                    ch = channels[i*20:i*20+20]
+                else:
+                    ch = channels[i*20:]
+                #print(ch)
+                await asyncio.gather(*[self._join_channel(x) for x in ch])
+                await asyncio.sleep(11)
+                i+=1
+        else:
+            await asyncio.gather(*[self._join_channel(x) for x in channels])
 
     async def _join_channel(self, entry):
         channel = re.sub('[#\s]', '', entry).lower()
@@ -284,8 +295,10 @@ class WebsocketConnection:
         except asyncio.TimeoutError:
             self._pending_joins.pop(channel)
 
-            raise asyncio.TimeoutError(
-                f'Request to join the "{channel}" channel has timed out. Make sure the channel exists.')
+            # raise asyncio.TimeoutError(
+            #     f'Request to join the "{channel}" channel has timed out. Make sure the channel exists.')
+            return f'Невозможно подключиться к {channel}, возможно неверный никнейм!'
+        return f'Подключено к {channel}'
 
     async def part_channels(self, *channels: str):
         """|coro|
@@ -408,7 +421,7 @@ class WebsocketConnection:
             tagdict = {}
             for tag in str(tags).split(";"):
                 t = tag.split("=")
-                if t[1].isnumeric():
+                if t[1].isdecimal():
                     t[1] = int(t[1])
                 tagdict[t[0]] = t[1]
             tags = tagdict
@@ -543,6 +556,14 @@ class WebsocketConnection:
 
             await self._dispatch('mode', channel, user, mstatus)
 
+        elif action == 'CLEARCHAT': #新增 被ban事件
+            log.debug('ACTION:: CLEARCHAT')
+
+            user = User(author=content, channel=channel, tags=tags, ws=self._websocket)
+            notice = ClearChat(channel=channel, user=user, tags=tags)
+
+            await self._dispatch('clearchat', notice)
+
     async def join_action(self, channel: str, author: str, tags):
         log.debug('ACTION:: JOIN: %s', channel)
 
@@ -552,13 +573,16 @@ class WebsocketConnection:
 
             self._channel_cache[channel] = {'channel': chan_, 'bot': user}
 
-            if self._pending_joins:
+            if channel in self._pending_joins:
                 self._pending_joins[channel].set_result(None)
                 self._pending_joins.pop(channel)
 
             self._channel_token += 1
 
-        cache = self._channel_cache[channel]['channel']._users
+        try:
+            cache = self._channel_cache[channel]['channel']._users
+        except KeyError as e:
+            raise ClientError("The \"nick\" value passed to the constructor does not match the user we are logged in as") from e
 
         try:
             user = cache[author.lower()]

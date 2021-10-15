@@ -3,7 +3,7 @@
 """
 The MIT License (MIT)
 
-Copyright (c) 2017-2019 TwitchIO
+Copyright (c) 2017-2021 TwitchIO
 
 Permission is hereby granted, free of charge, to any person obtaining a
 copy of this software and associated documentation files (the "Software"),
@@ -24,7 +24,7 @@ FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
 """
 
-__all__ = ('Message', 'Channel', 'User', 'Context', 'NoticeSubscription')
+__all__ = ('Message', 'Channel', 'User', 'Context', 'NoticeSubscription', 'ClearChat')
 
 
 import datetime
@@ -32,7 +32,7 @@ import time
 from typing import *
 
 from .abcs import Messageable
-from .errors import EchoMessageWarning
+from .errors import EchoMessageWarning, HTTPException, Unauthorized
 
 
 class Message:
@@ -149,11 +149,42 @@ class Channel(Messageable):
         except IndexError:
             pass
 
+    async def get_custom_rewards(self, token: str, broadcaster_id: int, *, only_manageable=False, ids: List[int]=None) -> List["CustomReward"]:
+        """
+        Fetches the channels custom rewards (aka channel points) from the api.
+        Parameters
+        ----------
+        token : :class:`str`
+            The users oauth token.
+        broadcaster_id : :class:`int`
+            The id of the broadcaster.
+        only_manageable : :class:`bool`
+            Whether to fetch all rewards or only ones you can manage. Defaults to false.
+        ids : List[:class:`int`]
+            An optional list of reward ids
+
+        Returns
+        -------
+
+        """
+        try:
+            data = await self._http.get_rewards(token, broadcaster_id, only_manageable, ids)
+        except Unauthorized as error:
+            raise Unauthorized("The given token is invalid", "", 401) from error
+        except HTTPException as error:
+            status = error.args[2]
+            if status == 403:
+                raise HTTPException("The custom reward was created by a different application, or channel points are "
+                                    "not available for the broadcaster (403)", error.args[1], 403) from error
+            raise
+        else:
+            return [CustomReward(self._http, x, self) for x in data['data']]
+
 
 class User:
 
-    __slots__ = ('_name', '_channel', '_tags', 'display_name', '_id', 'type',
-                 '_colour', 'subscriber', 'turbo',  '_ws', '_mod', 'reward', '_badges')  #'_badges'
+    __slots__ = ('_name', '_channel', '_tags', 'display_name', '_id', 'type','messid',
+                 '_colour', 'subscriber', 'turbo', '_badges', '_ws', '_mod', 'reward')
 
     def __init__(self, ws, **attrs):
         self._name = attrs.pop('author', None)
@@ -165,6 +196,9 @@ class User:
             self._tags = {}
         self.reward = self._tags.get('custom-reward-id', 'Empty')
         self.display_name = self._tags.get('display-name', self._name)
+
+        self.messid = self._tags.get('id', 0)
+
         self._id = int(self._tags.get('user-id', 0))
         self.type = self._tags.get('user-type', 'Empty')
         self._colour = self._tags.get('color', None)
@@ -175,16 +209,10 @@ class User:
         badges = self._tags.get('badges', None)
         if badges:
             for chunk in badges.split(','):
-                if not 'predictions' in chunk:
-                    k, _, v = chunk.partition('/')
-                    self._badges[k] = int(v)
-                else:
-                    k, _, v = chunk.partition('/')
-                    if '-' in v:
-                        v = v[5]
-                    self._badges[k] = int(v)
+                k, _, v = chunk.partition('/')
+                self._badges[k] = v
 
-        self._mod = self._tags.get('mod', 0) if self._tags else attrs.get('mod', 0)
+        self._mod = int(self._tags.get('mod', 0)) if self._tags else attrs.get('mod', 0)
 
     def __repr__(self):
         return '<User name={0.name} channel={0._channel}>'.format(self)
@@ -248,13 +276,13 @@ class User:
         """
         return self.subscriber
 
-    #@property
-    #def badges(self) -> dict:
+    @property
+    def badges(self) -> dict:
         """The badges associated with the User.
 
         Could be an empty Dict if no Tags were received.
         """
-    #    return self._badges
+        return self._badges
 
     @property
     def tags(self) -> dict:
@@ -265,11 +293,27 @@ class User:
         return self._tags
 
     @property
+    def prediction(self) -> Optional[str]:
+        """
+        the chatters current prediction.
+
+        Returns
+        --------
+        Optional[:class:`str`] Either blue, pink, or None
+        """
+        if "blue-1" in self._badges:
+            return "blue"
+        elif "pink-2" in self._badges:
+            return "pink"
+
+        return None
+
+    @property
     def is_mod(self) -> bool:
         """A boolean indicating whether the User is a moderator of the current channel."""
         if self._mod == 1:
             return True
-        if self.channel.name == self.display_name.lower():
+        if self.channel.name == self.name.lower():
             return True
         else:
             return False
@@ -389,3 +433,255 @@ class NoticeSubscription:
 
         self.sub_plan = tags['msg-param-sub-plan']
         self.sub_plan_name = tags['msg-param-sub-plan-name']
+
+class CustomReward:
+    """
+    Represents a Custom Reward object, as given by the api. Use :ref:`User.get_custom_rewards` to fetch these
+    """
+    __slots__ = "_http", "_channel", "id", "image", "background_color", "enabled", "cost", "title", "prompt", \
+                "input_required", "max_per_stream", "max_per_user_stream", "cooldown", "paused", "in_stock", \
+                "redemptions_skip_queue", "redemptions_current_stream", "cooldown_until", "_broadcaster_id"
+
+    def __init__(self, http, obj: dict, channel: Channel):
+        self._http = http
+        self._channel = channel
+        self._broadcaster_id = obj['broadcaster_id']
+        
+        self.id = obj['id']
+        self.image = obj['image']['url_1x'] if obj['image'] else obj['default_image']['url_1x']
+        self.background_color = obj['background_color']
+        self.enabled = obj['is_enabled']
+        self.cost = obj['cost']
+        self.title = obj['title']
+        self.prompt = obj['prompt']
+        self.input_required = obj['is_user_input_required']
+        self.max_per_stream = obj['max_per_stream_setting']['is_enabled'], obj['max_per_stream_setting']['max_per_stream']
+        self.max_per_user_stream = obj['max_per_user_per_stream_setting']['is_enabled'], \
+                                    obj['max_per_user_per_stream_setting']['max_per_user_per_stream']
+        self.cooldown = obj['global_cooldown_setting']['is_enabled'], obj['global_cooldown_setting']['global_cooldown_seconds']
+        self.paused = obj['paused']
+        self.in_stock = obj['is_in_stock']
+        self.redemptions_skip_queue = obj['should_redemptions_skip_request_queue']
+        self.redemptions_current_stream = obj['redemptions_redeemed_current_stream']
+        self.cooldown_until = obj['cooldown_expires_at']
+
+
+    async def edit(
+            self,
+            token: str,
+            title: str = None,
+            prompt: str = None,
+            cost: int = None,
+            background_color: str = None,
+            enabled: bool = None,
+            input_required: bool = None,
+            max_per_stream_enabled: bool = None,
+            max_per_stream: int = None,
+            max_per_user_per_stream_enabled: bool = None,
+            max_per_user_per_stream: int = None,
+            global_cooldown_enabled: bool = None,
+            global_cooldown: int = None,
+            paused: bool = None,
+            redemptions_skip_queue: bool = None
+    ):
+        """
+        Edits the reward. Note that apps can only modify rewards they have made.
+        
+        Parameters
+        -----------
+        token: the bearer token for the channel of the reward
+        title: the new title of the reward
+        prompt: the new prompt for the reward
+        cost: the new cost for the reward
+        background_color: the new background color for the reward
+        enabled: whether the reward is enabled or not
+        input_required: whether user input is required or not
+        max_per_stream_enabled: whether the stream limit should be enabled
+        max_per_stream: how many times this can be redeemed per stream
+        max_per_user_per_stream_enabled: whether the user stream limit should be enabled
+        max_per_user_per_stream: how many times a user can redeem this reward per stream
+        global_cooldown_enabled: whether the global cooldown should be enabled
+        global_cooldown: how many seconds the global cooldown should be
+        paused: whether redemptions on this reward should be paused or not
+        redemptions_skip_queue: whether redemptions skip the request queue or not
+
+        Returns
+        --------
+        :class:`CustomReward` itself.
+        """
+
+        try:
+            data = await self._http.update_reward(
+                token,
+                self._broadcaster_id,
+                self._id,
+                title,
+                prompt,
+                cost,
+                background_color,
+                enabled,
+                input_required,
+                max_per_stream_enabled,
+                max_per_stream,
+                max_per_user_per_stream_enabled,
+                max_per_user_per_stream,
+                global_cooldown_enabled,
+                global_cooldown,
+                paused,
+                redemptions_skip_queue
+            )
+        except Unauthorized as error:
+            raise Unauthorized("The given token is invalid", "", 401) from error
+        except HTTPException as error:
+            status = error.args[2]
+            if status == 403:
+                raise HTTPException("The custom reward was created by a different application, or channel points are "
+                                    "not available for the broadcaster (403)", error.args[1], 403) from error
+            raise
+        else:
+            for reward in data['data']:
+                if reward['id'] == self._id:
+                    self.__init__(self._http, reward, self._channel)
+                    break
+
+        return self
+
+    async def delete(self, token: str):
+        """
+        Deletes the custom reward
+
+        Parameters
+        ----------
+        token: :class:`str` the oauth token of the target channel
+
+        Returns
+        --------
+        None
+        """
+        try:
+            await self._http.delete_reward(token, self._broadcaster_id, self._id)
+        except Unauthorized as error:
+            raise Unauthorized("The given token is invalid", "", 401) from error
+        except HTTPException as error:
+            status = error.args[2]
+            if status == 403:
+                raise HTTPException("The custom reward was created by a different application, or channel points are "
+                                    "not available for the broadcaster (403)", error.args[1], 403) from error
+            raise
+
+    async def get_redemptions(self, token: str, status: str, sort: str = None):
+        """
+        Gets redemptions for this reward
+
+        Parameters
+        -----------
+        token: :class:`str` the oauth token of the target channel
+        status: :class:`str` one of UNFULFILLED, FULFILLED or CANCELED
+        sort: :class:`str` the order redemptions are returned in. One of OLDEST, NEWEST. Default: OLDEST.
+        """
+        try:
+            data = await self._http.get_reward_redemptions(token, self._broadcaster_id, self._id, status=status, sort=sort)
+        except Unauthorized as error:
+            raise Unauthorized("The given token is invalid", "", 401) from error
+        except HTTPException as error:
+            status = error.args[2]
+            if status == 403:
+                raise HTTPException("The custom reward was created by a different application, or channel points are "
+                                    "not available for the broadcaster (403)", error.args[1], 403) from error
+            raise
+        else:
+            return [CustomRewardRedemption(x, self._http, self) for x in data['data']]
+
+
+class CustomRewardRedemption:
+    __slots__ = "_http", "_broadcaster_id", "id", "user_id", "user_name", "input", "status", "redeemed_at", "reward"
+    def __init__(self, obj, http, parent):
+        self._http = http
+        self._broadcaster_id = obj['broadcaster_id']
+        self.id = obj['id']
+        self.user_id = int(obj['user_id'])
+        self.user_name = obj['user_name']
+        self.input = obj['user_input']
+        self.status = obj['status']
+        self.redeemed_at = datetime.datetime.fromisoformat(obj['redeemed_at'])
+        self.reward = parent or obj['reward']
+
+    async def fulfill(self, token: str):
+        """
+        marks the redemption as fulfilled
+
+        Parameters
+        ----------
+        token: :class:`str` the token of the target channel
+
+        Returns
+        --------
+        itself.
+        """
+        reward_id = self.reward.id if isinstance(self.reward, CustomReward) else self.reward['id']
+        try:
+            data = await self._http.update_reward_redemption_status(token, self._broadcaster_id, self.id, reward_id, "FULFILLED")
+        except Unauthorized as error:
+            raise Unauthorized("The given token is invalid", "", 401) from error
+        except HTTPException as error:
+            status = error.args[2]
+            if status == 403:
+                raise HTTPException("The custom reward was created by a different application, or channel points are "
+                                    "not available for the broadcaster (403)", error.args[1], 403) from error
+            raise
+        else:
+            self.__init__(data['data'], self._http, self.reward if isinstance(self.reward, CustomReward) else None)
+            return self
+
+    async def refund(self, token: str):
+        """
+        marks the redemption as cancelled
+
+        Parameters
+        ----------
+        token: :class:`str` the token of the target channel
+
+        Returns
+        --------
+        itself.
+        """
+        reward_id = self.reward.id if isinstance(self.reward, CustomReward) else self.reward['id']
+        try:
+            data = await self._http.update_reward_redemption_status(token, self._broadcaster_id, self.id, reward_id,
+                                                                    False)
+        except Unauthorized as error:
+            raise Unauthorized("The given token is invalid", "", 401) from error
+        except HTTPException as error:
+            status = error.args[2]
+            if status == 403:
+                raise HTTPException("The custom reward was created by a different application, or channel points are "
+                                    "not available for the broadcaster (403)", error.args[1], 403) from error
+            raise
+        else:
+            self.__init__(data['data'], self._http, self.reward if isinstance(self.reward, CustomReward) else None)
+            return self
+
+class ClearChat: # Add class for event_ban
+    """
+    The Dataclass sent to `event_ban` events.
+    Attributes
+    ------------
+    channel : :class:`.Channel`
+        The channel associated with the subscription event.
+    user : :class:`.User`
+        The user associated with the subscription event.
+    tags : dict
+        The raw tags dict associated with the subscription event.
+    ban_duration : Optional[int]
+        Duration of the timeout, in seconds.Could be None if the ban is permanent.
+    """
+
+    def __init__(self, *, channel: Channel, user: User, tags: dict):
+        self.channel = channel
+        self.user = user
+
+        self.tags = tags
+
+        self.ban_duration = tags.get('ban-duration', None)
+        if self.ban_duration:
+            self.ban_duration = int(self.ban_duration)

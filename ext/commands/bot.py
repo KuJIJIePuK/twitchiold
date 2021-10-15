@@ -3,7 +3,7 @@
 """
 The MIT License (MIT)
 
-Copyright (c) 2017-2019 TwitchIO
+Copyright (c) 2017-2021 TwitchIO
 
 Permission is hereby granted, free of charge, to any person obtaining a
 copy of this software and associated documentation files (the "Software"),
@@ -37,11 +37,11 @@ from typing import Union, List, Tuple
 from .core import Command, AutoCog
 from .errors import *
 from .stringparser import StringParser
-from twitchio.client import Client
-from twitchio.dataclasses import Context
-from twitchio.errors import ClientError
-from twitchio.webhook import TwitchWebhookServer
-from twitchio.websocket import WebsocketConnection
+from twitchiold.client import Client
+from twitchiold.dataclasses import Context
+from twitchiold.errors import ClientError
+from twitchiold.webhook import TwitchWebhookServer
+from twitchiold.websocket import WebsocketConnection
 
 
 class Bot(Client):
@@ -208,9 +208,10 @@ class Bot(Client):
         if not module:
             return
 
-        for cogname, _ in inspect.getmembers(module):
-            if cogname in self.cogs:
-                self.remove_cog(cogname)
+        cogs = []
+        for cogname, c in self.cogs.copy().items():
+            if c.__module__ == name:
+                cogs.append(c.__name__)
 
         try:
             module.breakdown(self)
@@ -830,6 +831,21 @@ class Bot(Client):
             @bot.event
             async def event_raw_data(data):
                 print(data)
+        """
+        pass
+
+    async def event_clearchat(self, notice):
+        """|coro|
+
+        Event called when the message in the chat be cleard.
+
+        Example
+        ---------
+        .. code:: py
+
+            @bot.event
+            async def event_clearchat(notice):
+                print(f'{notice.user.name}'s message has been cleard.')
         """
         pass
 

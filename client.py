@@ -3,7 +3,7 @@
 """
 The MIT License (MIT)
 
-Copyright (c) 2017-2019 TwitchIO
+Copyright (c) 2017-2021 TwitchIO
 
 Permission is hereby granted, free of charge, to any person obtaining a
 copy of this software and associated documentation files (the "Software"),
@@ -28,12 +28,12 @@ import asyncio
 from collections import namedtuple
 from typing import Union
 
-from twitchio.errors import HTTPException
-from twitchio.http import HTTPSession
+from twitchiold.errors import HTTPException
+from twitchiold.http import HTTPSession
 
 
 User = namedtuple('User', ('id', 'login', 'display_name', 'type', 'broadcaster_type', 'description',
-                           'profile_image', 'offline_image', 'view_count'))
+                           'profile_image', 'offline_image', 'view_count', 'created_at', 'email'))
 Chatters = namedtuple('Chatters', ('count', 'all', 'broadcaster', 'vips', 'moderators', 'staff',
                                    'admins', 'global_mods', 'viewers'))
 
@@ -71,8 +71,15 @@ class Client:
         """
 
         data = await self.http.get_users(*users)
+        # have to do some monkeying around here to keep away from breaking changes
+        resp = []
+        for user in data:
+            user['offline_image'] = user.pop('offline_image_url', None)
+            user['profile_image'] = user.pop('profile_image_url', None)
+            user['email'] = user.get('email', None)
+            resp.append(User(*user.values()))
 
-        return [User(*user.values()) for user in data]
+        return resp
 
     async def get_stream(self, channel: Union[int, str]):
         """|coro|

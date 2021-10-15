@@ -3,7 +3,7 @@
 """
 The MIT License (MIT)
 
-Copyright (c) 2017-2019 TwitchIO
+Copyright (c) 2017-2021 TwitchIO
 
 Permission is hereby granted, free of charge, to any person obtaining a
 copy of this software and associated documentation files (the "Software"),
@@ -27,8 +27,8 @@ DEALINGS IN THE SOFTWARE.
 __title__ = 'twitchio'
 __author__ = 'TwitchIO'
 __license__ = 'MIT'
-__copyright__ = 'Copyright 2017-2020 TwitchIO'
-__version__ = '1.1.0'
+__copyright__ = 'Copyright 2017-2021 TwitchIO'
+__version__ = '1.2.2'
 
 import logging
 
