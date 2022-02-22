@@ -3,7 +3,7 @@
 """
 The MIT License (MIT)
 
-Copyright (c) 2015-2021 Rapptz
+Copyright (c) 2015-2020 Rapptz
 
 Permission is hereby granted, free of charge, to any person obtaining a
 copy of this software and associated documentation files (the "Software"),
@@ -29,23 +29,23 @@ import random
 
 
 class ExponentialBackoff:
-    """An implementation of the exponential backoff algorithm.
+    """An implementation of the exponential backoff algorithm
 
     Provides a convenient interface to implement an exponential backoff
     for reconnecting or retrying transmissions in a distributed network.
 
     Once instantiated, the delay method will return the next interval to
-    wait for when retrying a connection or transmission. The maximum
+    wait for when retrying a connection or transmission.  The maximum
     delay increases exponentially with each retry up to a maximum of
     2^10 * base, and is reset if no more attempts are needed in a period
     of 2^11 * base seconds.
 
     Parameters
     ----------
-    base: int
-        The base delay in seconds. The first retry-delay will be up to
+    base: :class:`int`
+        The base delay in seconds.  The first retry-delay will be up to
         this many seconds.
-    integral: bool
+    integral: :class:`bool`
         Set to True if whole periods of base is desirable, otherwise any
         number in between may be returned.
     """
@@ -55,7 +55,7 @@ class ExponentialBackoff:
 
         self._exp = 0
         self._max = 10
-        self._reset_time = base * 2 ** 11
+        self._reset_time = base * 2**11
         self._last_invocation = time.monotonic()
 
         # Use our own random instance to avoid messing with global one
@@ -65,10 +65,10 @@ class ExponentialBackoff:
         self._randfunc = rand.randrange if integral else rand.uniform
 
     def delay(self):
-        """Compute the next delay.
+        """Compute the next delay
 
         Returns the next delay to wait according to the exponential
-        backoff algorithm. This is a value between 0 and base * 2^exp
+        backoff algorithm.  This is a value between 0 and base * 2^exp
         where exponent starts off at 1 and is incremented at every
         invocation of this method up to a maximum of 10.
 
@@ -83,4 +83,4 @@ class ExponentialBackoff:
             self._exp = 0
 
         self._exp = min(self._exp + 1, self._max)
-        return self._randfunc(0, self._base * 2 ** self._exp)
+        return self._randfunc(0, self._base * 2**self._exp)

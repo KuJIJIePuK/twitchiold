@@ -1,5 +1,3 @@
-# -*- coding: utf-8 -*-
-
 """
 The MIT License (MIT)
 
@@ -26,13 +24,12 @@ DEALINGS IN THE SOFTWARE.
 
 import abc
 import time
-import asyncio
+
 from .cooldowns import RateBucket
 from .errors import *
 
 
 class IRCLimiterMapping:
-
     def __init__(self):
         self.buckets = {}
 
@@ -45,11 +42,7 @@ class IRCLimiterMapping:
 
         if bucket.method != method:
             bucket.method = method
-            if method == 'mod':
-                bucket.limit = bucket.MODLIMIT
-            else:
-                bucket.limit = bucket.IRCLIMIT
-
+            bucket.limit = bucket.MODLIMIT if method == "mod" else bucket.IRCLIMIT
             self.buckets[channel] = bucket
 
         return bucket
@@ -58,62 +51,54 @@ class IRCLimiterMapping:
 limiter = IRCLimiterMapping()
 
 
-class Messageable(metaclass=abc.ABCMeta):
+class Messageable(abc.ABC):
 
     __slots__ = ()
 
-    __invalid__ = ('ban', 'unban', 'timeout', 'untimeout', 'w', 'colour', 'color', 'mod',
-                   'unmod', 'clear', 'subscribers', 'subscriberoff', 'slow', 'slowoff',
-                   'r9k', 'r9koff', 'emoteonly', 'whis', 'emoteonlyoff', 'host', 'unhost', 'followers', 'followersoff')
-
     @abc.abstractmethod
-    def _get_channel(self):
-        raise NotImplementedError
-
-    @property
-    @abc.abstractmethod
-    def _get_socket(self):
+    def _fetch_channel(self):
         raise NotImplementedError
 
     @abc.abstractmethod
-    def _get_method(self):
+    def _fetch_websocket(self):
+        raise NotImplementedError
+
+    @abc.abstractmethod
+    def _fetch_message(self):
+        raise NotImplementedError
+
+    @abc.abstractmethod
+    def _bot_is_mod(self):
         raise NotImplementedError
 
     def check_bucket(self, channel):
-        ws = self._get_socket
+        mod = self._bot_is_mod()
 
-        try:
-            bot = ws._channel_cache[channel]['bot']
-        except KeyError:
-            bucket = limiter.get_bucket(channel=channel, method='irc')
+        if mod:
+            bucket = limiter.get_bucket(channel=channel, method="mod")
         else:
-            if bot.is_mod:
-                bucket = limiter.get_bucket(channel=channel, method='mod')
-            else:
-                bucket = limiter.get_bucket(channel=channel, method='irc')
+            bucket = limiter.get_bucket(channel=channel, method="irc")
 
         now = time.time()
         bucket.update()
 
         if bucket.limited:
-            raise TwitchIOBException(f'IRC Message rate limit reached for channel <{channel}>.'
-                                     f' Please try again in {bucket._reset - now:.2f}s')
+            raise IRCCooldownError(
+                f"IRC Message rate limit reached for channel <{channel}>."
+                f" Please try again in {bucket._reset - now:.2f}s"
+            )
 
-    @staticmethod
-    def check_content(channel, content: str):
-        if not channel:
-            raise TwitchIOBException('Invalid channel for Messageable. Must be channel or user.')
-
+    def check_content(self, content: str):
         if len(content) > 500:
-            raise InvalidContent('Length of message can not be > 500.')
+            raise InvalidContent("Content must not exceed 500 characters.")
 
     async def send(self, content: str):
         """|coro|
 
+
         Send a message to the destination associated with the dataclass.
 
         Destination will either be a channel or user.
-        Chat commands are not allowed to be invoked with this method.
 
         Parameters
         ------------
@@ -122,303 +107,57 @@ class Messageable(metaclass=abc.ABCMeta):
 
         Raises
         --------
-        TwitchIOBException
-            Invalid destination.
         InvalidContent
             Invalid content.
         """
-        content = str(content)
+        entity = self._fetch_channel()
+        ws = self._fetch_websocket()
 
-        channel, user = self._get_channel()
-        method = self._get_method()
+        self.check_content(content)
+        self.check_bucket(channel=entity.name)
 
-        self.check_content(channel, content)
+        try:
+            name = entity.channel.name
+        except AttributeError:
+            name = entity.name
 
-        if content.startswith(('.', '/')):
-            if content.lstrip('./').startswith(self.__invalid__):
-                raise InvalidContent('UnAuthorised chat command for send. Use built in method(s).')
+        if entity.__messageable_channel__:
+            await ws.send(f"PRIVMSG #{name} :{content}\r\n")
+        else:
+            await ws.send(f"PRIVMSG #jtv :/w {entity.name} {content}\r\n")
 
-        ws = self._get_socket
-        self.check_bucket(channel)
-
-        if method == 'User':
-            content = f'.w {user} {content}'
-
-        await ws.send_privmsg(channel, content=content)
-
-    async def clear(self):
+    async def reply(self, content: str):
         """|coro|
 
-        Method which sends .clear to Twitch and clears the chat.
-        """
 
-        ws = self._get_socket
-        channel, _ = self._get_channel()
+        Send a message in reply to the user who sent a message in the destination
+        associated with the dataclass.
 
-        self.check_bucket(channel)
-
-        await ws.send_privmsg(channel, content=f'.clear')
-    
-    async def whis(self,touser = 'kujijibot',mes = '',delay = 0):
-        if mes!='':
-            ws = self._get_socket
-            channel, _ = self._get_channel()
-
-            self.check_bucket(channel)
-            await asyncio.sleep(delay)
-            await ws.send_privmsg(channel, content=f'.w {touser} {mes}')
-
-    async def disconnect(self, delay = 0):
-        if mes!='':
-            ws = self._get_socket
-            channel, _ = self._get_channel()
-
-            self.check_bucket(channel)
-            await asyncio.sleep(delay)
-            await ws.send_privmsg(channel, content=f'.disconnect')
-    
-
-    async def emoteonly(self,delay = 0):
-        """|coro|
-
-        Method which sends a .slow to Twitch and sets the channel to slowmode.
-        """
-
-        ws = self._get_socket
-        channel, _ = self._get_channel()
-
-        self.check_bucket(channel)
-        await asyncio.sleep(delay)
-        await ws.send_privmsg(channel, content=f'.emoteonly')
-    async def emoteonlyoff(self,delay = 0):
-        """|coro|
-
-        Method which sends a .slow to Twitch and sets the channel to slowmode.
-        """
-
-        ws = self._get_socket
-        channel, _ = self._get_channel()
-
-        self.check_bucket(channel)
-        await asyncio.sleep(delay)
-        await ws.send_privmsg(channel, content=f'.emoteonlyoff')
-
-    async def subscribers(self,delay = 0):
-        """|coro|
-
-        Method which sends a .slow to Twitch and sets the channel to slowmode.
-        """
-
-        ws = self._get_socket
-        channel, _ = self._get_channel()
-
-        self.check_bucket(channel)
-        await asyncio.sleep(delay)
-        await ws.send_privmsg(channel, content=f'.subscribers')
-
-
-    async def subscribersoff(self,delay = 0):
-        """|coro|
-
-        Method which sends a .slow to Twitch and sets the channel to slowmode.
-        """
-
-        ws = self._get_socket
-        channel, _ = self._get_channel()
-
-        self.check_bucket(channel)
-        await asyncio.sleep(delay)
-        await ws.send_privmsg(channel, content=f'.subscribersoff')
-
-
-
-    async def followers(self,time = 0,delay = 0):
-        """|coro|
-
-        Method which sends a .slow to Twitch and sets the channel to slowmode.
-        """
-
-        ws = self._get_socket
-        channel, _ = self._get_channel()
-
-        self.check_bucket(channel)
-        await asyncio.sleep(delay)
-        await ws.send_privmsg(channel, content=f'.followers {time}')
-
-    async def followersoff(self,delay = 0):
-        
-        ws = self._get_socket
-        channel, _ = self._get_channel()
-
-        self.check_bucket(channel)
-        await asyncio.sleep(delay)
-        await ws.send_privmsg(channel, content=f'.followersoff')
-
-    async def slow(self):
-        """|coro|
-
-        Method which sends a .slow to Twitch and sets the channel to slowmode.
-        """
-
-        ws = self._get_socket
-        channel, _ = self._get_channel()
-
-        self.check_bucket(channel)
-
-        await ws.send_privmsg(channel, content=f'.slow')
-
-    async def unslow(self):
-        """|coro|
-
-        Method which sends a .slowoff to Twitch and sets the channel to slowmode off.
-        """
-
-        ws = self._get_socket
-        channel, _ = self._get_channel()
-
-        self.check_bucket(channel)
-
-        await ws.send_privmsg(channel, content=f'.slowoff')
-
-    async def slow_off(self):
-        """|coro|
-
-        Alias to unslow.
-        """
-        await self.unslow()
-
-    async def timeout(self, user: str, duration: int=600, reason: str=''):
-        """|coro|
-
-        Method which sends a .timeout command to Twitch.
-
-        Parameters
-        ------------
-        user: str
-            The user you wish to timeout.
-        duration: int
-            The duration in seconds to timeout the user.
-        reason: Optional[str]
-            The reason you timed out the user.
-        """
-
-        ws = self._get_socket
-        channel, _ = self._get_channel()
-
-        self.check_bucket(channel)
-
-        await ws.send_privmsg(channel, content=f'.timeout {user} {duration} {reason}')
-
-    async def untimeout(self, user: str):
-
-        ws = self._get_socket
-        channel, _ = self._get_channel()
-
-        self.check_bucket(channel)
-
-        await ws.send_privmsg(channel, content=f'.untimeout {user}')
-
-    async def delete(self, id: str):
-
-        ws = self._get_socket
-        channel, _ = self._get_channel()
-
-        self.check_bucket(channel)
-
-        await ws.send_privmsg(channel, content=f'.delete {id}')
-    async def ban(self, user: str, reason: str=''):
-        """|coro|
-
-        Method which sends a .ban command to Twitch.
-
-        Parameters
-        ------------
-        user: str
-            The user you would like to ban.
-        reason: Optional[str]
-            The reason you banned this user.
-        """
-
-        ws = self._get_socket
-        channel, _ = self._get_channel()
-
-        self.check_bucket(channel)
-
-        await ws.send_privmsg(channel, content=f'.ban {user} {reason}')
-
-    async def unban(self, user: str):
-        """|coro|
-
-        Method which sends a .unban command to Twitch.
-
-        Parameters
-        ------------
-        user: str
-            The user you wish to unban.
-        """
-
-        ws = self._get_socket
-        channel, _ = self._get_channel()
-
-        self.check_bucket(channel)
-
-        await ws.send_privmsg(channel, content=f'.unban {user}')
-
-    async def send_me(self, content: str):
-        """|coro|
-
-        Method which sends .me along with your content.
+        Destination will be the context of which the message/command was sent.
 
         Parameters
         ------------
         content: str
-            The message you wish to send.
+            The content you wish to send as a message. The content must be a string.
 
         Raises
         --------
         InvalidContent
-            The content exceeded 500 characters.
+            Invalid content.
         """
+        entity = self._fetch_channel()
+        ws = self._fetch_websocket()
+        message = self._fetch_message()
 
-        ws = self._get_socket
-        channel, _ = self._get_channel()
+        self.check_content(content)
+        self.check_bucket(channel=entity.name)
 
-        self.check_bucket(channel)
-        self.check_content(channel, content)
+        try:
+            name = entity.channel.name
+        except AttributeError:
+            name = entity.name
 
-        await ws.send_privmsg(channel, content=f'.me {content}')
-
-    async def colour(self, colour: str):
-        """Send a colour change request to Twitch.
-
-        Parameters
-        ------------
-        colour: str
-            A predefined colour listed below. Turbo Users may use a valid hex code. e.g #233233
-
-            Blue
-            BlueViolet
-            CadetBlue
-            Chocolate
-            Coral
-            DodgerBlue
-            FireBrick
-            GoldenRod
-            Green
-            HotPink
-            OrangeRed
-            Red
-            SeaGreen
-            SpringGreen
-            YellowGreen
-        """
-        ws = self._get_socket
-        channel, _ = self._get_channel()
-
-        self.check_bucket(channel)
-        await ws.send_privmsg(channel, content=f'.color {colour}')
-
-    async def color(self, colour: str):
-        """An alias to colour."""
-        await self.colour(colour)
-
+        if entity.__messageable_channel__:
+            await ws.reply(message.id, f"PRIVMSG #{name} :{content}\r\n")
+        else:
+            await ws.send(f"PRIVMSG #jtv :/w {name} {content}\r\n")

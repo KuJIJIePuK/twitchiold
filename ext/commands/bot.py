@@ -1,5 +1,3 @@
-# -*- coding: utf-8 -*-
-
 """
 The MIT License (MIT)
 
@@ -24,124 +22,178 @@ FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
 """
 
+from __future__ import annotations
 import asyncio
 import importlib
 import inspect
-import itertools
 import sys
-import threading
 import traceback
-import uuid
-from typing import Union, List, Tuple
+import types
+import warnings
+from typing import Callable, Optional, Union, Coroutine, Dict, List, TYPE_CHECKING, Mapping, Awaitable
 
-from .core import Command, AutoCog
+from twitchio.client import Client
+from twitchio.http import TwitchHTTP
+from twitchio.websocket import WSConnection
+from .core import Command, Group, Context
 from .errors import *
+from .meta import Cog
 from .stringparser import StringParser
-from twitchiold.client import Client
-from twitchiold.dataclasses import Context
-from twitchiold.errors import ClientError
-from twitchiold.webhook import TwitchWebhookServer
-from twitchiold.websocket import WebsocketConnection
+from .utils import _CaseInsensitiveDict
+
+if TYPE_CHECKING:
+    from twitchio import Message
 
 
 class Bot(Client):
-    """Twitch IRC Bot.
+    def __init__(
+        self,
+        token: str,
+        *,
+        prefix: Union[str, list, tuple, set, Callable, Coroutine],
+        client_secret: str = None,
+        initial_channels: Union[list, tuple, Callable] = None,
+        heartbeat: Optional[float] = 30.0,
+        **kwargs,
+    ):
+        super().__init__(
+            token=token, client_secret=client_secret, initial_channels=initial_channels, heartbeat=heartbeat
+        )
 
-    Parameters
-    ------------
-    irc_token: str
-        The OAuth token to use for IRC.
-    client_id: str:
-        Your application ID, used for HTTP endpoints.
-    prefix: str
-        The bots prefix.
-    nick: str
-        The bots nick in lowercase.
-    loop: [Optional]
-        The asyncio event loop to use.
-    initial_channels: list
-        The initial channels for the bot to join on startup.
-    webhook_server: bool [Optional]
-        A bool indicating whether the built-in webhook server should be used.
-    local_host: str [Optional]
-        The local host the webhook server should run on.
-    external_host: str [Optional]
-        The external address the webhook_server should lsiten on.
-    port: int [Optional]
-        The port the webhook_server should be started on.
-    callback: str [Optional]
-        The pages as a string where the webhook_server should lsiten for events.
+        self._prefix = prefix
 
-    Notes
-    -------
-    .. note::
+        if kwargs.get("case_insensitive", False):
+            self._commands: Union[dict, _CaseInsensitiveDict] = _CaseInsensitiveDict()
+            self._command_aliases: Union[dict, _CaseInsensitiveDict] = _CaseInsensitiveDict()
+        else:
+            self._commands = {}
+            self._command_aliases = {}
 
-        To enable the webhook server, the webhook_server parameter must be True.
-        A local_host, external_host and port must also be provided.
+        self._modules: Dict[str, types.ModuleType] = {}
+        self._cogs: Dict[str, Cog] = {}
+        self._checks: List[Callable[[Context], Union[bool, Awaitable[bool]]]] = []
 
+        self.__init__commands__()
 
-        An optional parameter `callback` may be passed. This should be the page Twitch sends data to.
-        A long random string, such as hex, is advised e.g `2t389hth892t3h898hweiogtieo`
-    """
+    @classmethod
+    def from_client_credentials(
+        cls,
+        client_id: str,
+        client_secret: str,
+        *,
+        loop: asyncio.AbstractEventLoop = None,
+        heartbeat: Optional[float] = 30.0,
+        prefix: Union[str, list, tuple, set, Callable, Coroutine] = "!",
+    ) -> Bot:
+        """
+        creates a client application token from your client credentials.
 
-    def __init__(self, irc_token: str, api_token: str=None, *, client_id: str=None, client_secret: str=None, prefix: Union[list, tuple, str],
-                 nick: str, loop: asyncio.BaseEventLoop=None, initial_channels: Union[list, tuple]=None,
-                 webhook_server: bool=False, local_host: str=None, external_host: str=None, callback: str=None,
-                 port: int=None, **attrs):
+        .. warning:
 
+            This method generates a token that is not suitable for logging in to IRC.
+            This is not recommended for Bot objects, as it renders the commands system inoperable.
+
+        .. note:
+
+            This classmethod skips :meth:`~.__init__`
+
+        Parameters
+        ------------
+        client_id: :class`str`
+            Your application's Client ID.
+        client_secret: :class:`str`
+            An application Client Secret used to generate Access Tokens automatically.
+        loop: Optional[:class:`asyncio.AbstractEventLoop`]
+            The event loop the client will use to run.
+        heartbeat: Optional[:class:`float`]
+            The heartbeat interval. Defaults to 30.
+        prefix: Union[:class:`str`, :class:`list`, :class:`tuple`, :class:`set`, Callable, Coroutine]
+            The bots prefix. Defaults to "!".
+
+        Returns
+        --------
+        A new :class:`Bot` instance
+        """
+        warnings.warn(DeprecationWarning("from_client_credentials is not suitable for Bots."))
+        self = cls.__new__(cls)
         self.loop = loop or asyncio.get_event_loop()
-        super().__init__(loop=self.loop, client_id=client_id, api_token=api_token, client_secret=client_secret, **attrs)
-        self.nick = nick
-        self.initial_channels = initial_channels
-
-        self._ws = WebsocketConnection(bot=self, loop=self.loop, http=self.http, irc_token=irc_token,
-                                       nick=nick, initial_channels=initial_channels, **attrs)
-
-        self._webhook_server = None
-        if webhook_server:
-            self._webhook_server = TwitchWebhookServer(bot=self,
-                                                       local=local_host,
-                                                       external=external_host,
-                                                       callback=callback,
-                                                       port=port)
-            loop = asyncio.new_event_loop()
-            thread = threading.Thread(target=self._webhook_server.run_server, args=(loop, ), daemon=True)
-            thread.start()
-
-        self.loop.create_task(self._prefix_setter(prefix))
-
-        self.extra_listeners = {}
-        self.commands = {}
-        self.modules = {}
-        self.cogs = {}
-        self._aliases = {}
+        self._http = TwitchHTTP(self, client_id=client_id, client_secret=client_secret)
+        self._heartbeat = heartbeat
+        self._connection = WSConnection(
+            client=self,
+            loop=self.loop,
+            initial_channels=None,
+            heartbeat=self._heartbeat,
+        )  # The only reason we're even creating this is to avoid attribute errors
+        self._events = {}
+        self._waiting = []
+        self._modules = {}
+        self._prefix = prefix
+        self._cogs = {}
+        self._commands = {}
+        self._command_aliases = {}
         self._checks = []
-        self.prefixes = None
 
-        self._init_methods()
+        return self
 
-    def _init_methods(self):
+    def __init__commands__(self):
         commands = inspect.getmembers(self)
 
         for _, obj in commands:
             if not isinstance(obj, Command):
                 continue
 
-            obj.instance = self
+            obj._instance = self
 
             try:
                 self.add_command(obj)
-            except CommandError:
+            except TwitchCommandError:
                 traceback.print_exc()
                 continue
 
-    def add_command(self, command):
+    async def __get_prefixes__(self, message):
+        ret = self._prefix
+
+        if callable(self._prefix):
+            if inspect.iscoroutinefunction(self._prefix):
+                ret = await self._prefix(self, message)
+            else:
+                ret = self._prefix(self, message)
+
+        if not isinstance(ret, (list, tuple, set, str)):
+            raise TypeError(f"Prefix must be of either class <list, tuple, set, str> not <{type(ret)}>")
+
+        return ret
+
+    async def get_prefix(self, message):
+        # TODO Docs
+        prefixes = await self.__get_prefixes__(message)
+
+        if not isinstance(prefixes, str):
+            for prefix in prefixes:
+                if message.content.startswith(prefix):
+                    return prefix
+        elif message.content.startswith(prefixes):
+            return prefixes
+        else:
+            return None
+
+    def add_command(self, command: Command):
+        """Method which registers a command for use by the bot.
+
+        Parameters
+        ------------
+        command: :class:`.Command`
+            The command to register.
+        """
         if not isinstance(command, Command):
-            raise TypeError('Commands passed my be a subclass of Command.')
+            raise TypeError("Commands passed must be a subclass of Command.")
         elif command.name in self.commands:
-            raise CommandError(f'Failed to load command <{command.name}>, a command with that name already exists')
+            raise TwitchCommandError(
+                f"Failed to load command <{command.name}>, a command with that name already exists."
+            )
         elif not inspect.iscoroutinefunction(command._callback):
-            raise CommandError(f'Failed to load command <{command.name}>. Commands must be coroutines.')
+            raise TwitchCommandError(f"Failed to load command <{command.name}>. Commands must be coroutines.")
 
         self.commands[command.name] = command
 
@@ -151,23 +203,133 @@ class Bot(Client):
         for alias in command.aliases:
             if alias in self.commands:
                 del self.commands[command.name]
-                raise CommandError(
-                    f'Failed to load command <{command.name}>, a command with that name/alias already exists.')
+                raise TwitchCommandError(
+                    f"Failed to load command <{command.name}>, a command with that name/alias already exists."
+                )
 
-            self._aliases[alias] = command.name
+            self._command_aliases[alias] = command.name
 
-    def remove_command(self, command):
-        if command.aliases:
-            for a in command.aliases:
-                self._aliases.pop(a)
+    def get_command(self, name: str) -> Optional[Command]:
+        """Method which retrieves a registered command.
+
+        Parameters
+        ------------
+        name: :class:`str`
+            The name or alias of the command to retrieve.
+
+        Returns
+        ---------
+        Optional[:class:`.Command`]
+        """
+        name = self._command_aliases.get(name, name)
+
+        return self._commands.get(name, None)
+
+    def remove_command(self, name: str):
+        """
+        Method which removes a registered command
+
+        Parameters
+        -----------
+        name: :class:`str`
+            the name or alias of the command to delete.
+
+        Returns
+        --------
+        None
+
+        Raises
+        -------
+        :class:`.CommandNotFound` The command was not found
+        """
+        name = self._command_aliases.pop(name, name)
+
+        for alias in list(self._command_aliases.keys()):
+            if self._command_aliases[alias] == name:
+                del self._command_aliases[alias]
 
         try:
-            del self.commands[command.name]
+            del self._commands[name]
         except KeyError:
-            # Not sure why this would happen, but people be people.
+            raise CommandNotFound(f"The command '{name}` was not found")
+
+    def get_cog(self, name: str) -> Optional[Cog]:
+        """Retrieve a Cog from the bots loaded Cogs.
+
+        Could be None if the Cog was not found.
+
+        Returns
+        ---------
+        Optional[:class:`.Cog`]
+        """
+        return self.cogs.get(name, None)
+
+    async def get_context(self, message, *, cls=None):
+        """Get a Context object from a message.
+
+        Parameters
+        ----------
+        message: :class:`.Message`
+            The message object to get context for.
+        cls
+            The class to return. Defaults to Context. Its constructor must take message, prefix, valid, and bot
+            as arguments.
+
+        Returns
+        ---------
+        An instance of cls.
+
+        Raises
+        ---------
+        :class:`.CommandNotFound` No valid command was passed
+        """
+        if not cls:
+            cls = Context
+
+        prefix = await self.get_prefix(message)
+        if not prefix:
+            return cls(message=message, prefix=prefix, valid=False, bot=self)
+
+        content = message.content[len(prefix) : :].lstrip()  # Strip prefix and remainder whitespace
+        view = StringParser()
+        parsed = view.process_string(content)  # Return the string as a dict view
+
+        try:
+            command_ = parsed.pop(0)
+        except KeyError:
+            raise CommandNotFound("No valid command was passed.")
+
+        try:
+            command_ = self._command_aliases[command_]
+        except KeyError:
             pass
 
-    def load_module(self, name: str):
+        if command_ in self.commands:
+            command_ = self.commands[command_]
+        else:
+            context = cls(message=message, bot=self, prefix=prefix, command=None, valid=False, view=view)
+            error = CommandNotFound(f'No command "{command_}" was found.')
+
+            self.run_event("command_error", context, error)
+            return context
+
+        context = cls(message=message, bot=self, prefix=prefix, command=command_, valid=True, view=view)
+
+        return context
+
+    async def handle_commands(self, message):
+        context = await self.get_context(message)
+        await self.invoke(context)
+
+    async def invoke(self, context):
+        # TODO Docs
+        if not context.prefix or not context.is_valid:
+            return
+
+        self.run_event("command_invoke", context)
+        await context.command(context)
+
+    def load_module(self, name: str) -> None:
         """Method which loads a module and it's cogs.
 
         Parameters
@@ -175,371 +337,119 @@ class Bot(Client):
         name: str
             The name of the module to load in dot.path format.
         """
-        if name in self.modules:
-            return
-
-        valid = False
+        if name in self._modules:
+            raise ValueError(f"Module <{name}> is already loaded")
 
         module = importlib.import_module(name)
-        for _, member in inspect.getmembers(module):
-            if inspect.isclass(member) and issubclass(member, AutoCog):
-                member(self)._prepare(self)
-                valid = True
 
-        if hasattr(module, 'prepare'):
-            module.prepare(self)
-        elif not valid:
+        if hasattr(module, "prepare"):
+            module.prepare(self)  # type: ignore
+        else:
             del module
             del sys.modules[name]
-            raise ImportError(f'Module <{name}> is missing a prepare method')
+            raise ImportError(f"Module <{name}> is missing a prepare method")
 
-        if name not in self.modules:
-            self.modules[name] = module
+        self._modules[name] = module
 
-    def unload_module(self, name: str):
-        """Method which unloads a module and it's cogs/commands/events.
+    def unload_module(self, name: str) -> None:
+        """Method which unloads a module and it's cogs.
 
         Parameters
-        ------------
+        ----------
         name: str
-            The name of the module to load in dot.path format.
+            The name of the module to unload in dot.path format.
         """
-        module = self.modules.pop(name, None)
-        if not module:
-            return
+        if name not in self._modules:
+            raise ValueError(f"Module <{name}> is not loaded")
 
-        cogs = []
-        for cogname, c in self.cogs.copy().items():
-            if c.__module__ == name:
-                cogs.append(c.__name__)
+        module = self._modules.pop(name)
 
-        try:
-            module.breakdown(self)
-        finally:
-            del module
-            del sys.modules[name]
-
-    def add_cog(self, cog):
-        """Method which loads a cog and adds it's commands and events.
-
-        Parameters
-        ------------
-        cog:
-            An instance of the cog you wish to load.
-        """
-        members = inspect.getmembers(cog)
-
-        for name, member in members:
-            if isinstance(member, Command):
-                member.instance = cog
-                self.add_command(member)
-            elif name.startswith('event_'):
-                self.add_listener(member, name)
-
-        self.cogs[type(cog).__name__] = cog
-
-    def remove_cog(self, cogname: str):
-        """Method which removes a cog and adds it's commands and events.
-
-        Parameters
-        ------------
-        cogname:
-            The name of the cog you wish to remove.
-        """
-        cog = self.cogs.pop(cogname, None)
-        if not cog:
-            return
-
-        for name, member in inspect.getmembers(cog):
-            if isinstance(member, Command):
-                self.remove_command(member)
-            elif name.startswith('event_'):
-                del self.extra_listeners[name]
-            elif name in self.extra_listeners:
-                del self.extra_listeners[member.__name__]
-
-        try:
-            unload = getattr(cog, f'_{cog.__name__}__unload')
-        except AttributeError:
-            pass
-        else:
-            unload(self)
-
-        del cog
-
-    def add_check(self, func):
-        """Adds a global check to the bot.
-
-        Parameters
-        ------------
-        func : callable
-            The function or coroutine to add as a global check to the bot.
-        """
-
-        self._checks.append(func)
-
-    def remove_check(self, func):
-        """Remove a global check from the bot.
-
-        Parameters
-        ------------
-        func : callable
-            The function to remove as a global check from the bot.
-        """
-
-        self._checks.remove(func)
-
-    def run(self):
-        """A blocking call that initializes the IRC Bot event loop.
-
-        This should be the last function to be called.
-
-        .. warning::
-            You do not need to use this function unless you are accessing the IRC Endpoints.
-        .. warning::
-            You do not use this function if you are using :meth:`.start`
-        """
-        loop = self.loop or asyncio.get_event_loop()
-
-        loop.run_until_complete(self._ws._connect())
-
-        try:
-            loop.run_until_complete(self._ws._listen())
-        except KeyboardInterrupt:
-            pass
-        finally:
-            self._ws.teardown()
-
-    async def start(self):
-        """|coro|
-
-        An asynchronous call which starts the IRC Bot event loop.
-
-        This should only be used when integrating Twitch Bots with Discord Bots.
-        :meth:`.run` should be used instead.
-
-        .. warning::
-            Do not use this function if you are using :meth:`.run`
-        """
-        await self._ws._connect()
-
-        try:
-            await self._ws._listen()
-        except KeyboardInterrupt:
-            pass
-        finally:
-            self._ws.teardown()
-
-    async def _prefix_setter(self, item):
-        if inspect.iscoroutinefunction(item):
-            item = await item()
-        elif callable(item):
-            item = item()
-
-        if isinstance(item, (list, tuple)):
-            self.prefixes = item
-        elif isinstance(item, str):
-            self.prefixes = [item]
-        else:
-            raise ClientError('Invalid prefix provided. A list, tuple, str or callable returning either should be used.')
-
-    async def _get_prefixes(self, message):
-        prefix = ret = self.prefixes
-        if callable(prefix):
-            ret = prefix(self, message.content)
-            if inspect.isawaitable(ret):
-                ret = await ret
-
-        if isinstance(ret, (list, tuple)):
-            ret = [p for p in ret if p]
-
-        if isinstance(ret, str):
-            ret = [ret]
-
-        if not ret:
-            raise ClientError('Invalid prefix provided.')
-
-        return ret
-
-    async def get_prefix(self, message):
-        prefixes = await self._get_prefixes(message)
-
-        prefix = None
-        content = message.content
-
-        for pre in prefixes:
-            if content.startswith(pre):
-                prefix = pre
-                break
-
-        return prefix
-
-    def get_channel(self, name: str):
-        """Retrieves a :class:`.Channel` from cache.
-
-        Parameters
-        ------------
-        name: str
-            The channel name to retrieve from cache.
-        """
-        cache = self._ws._channel_cache.get(name.lower())
-        if cache:
-            return cache['channel']
-
-        return None
-
-    async def join_channels(self, channels: Union[List[str], Tuple[str]]):
-        """|coro|
-
-        Join the specified channels.
-
-        Parameters
-        ------------
-        channels: Union[List[str], Tuple[str]]
-            The channels in either a list or tuple form to join.
-        """
-        await self._ws.join_channels(*channels)
-
-    async def part_channels(self, channels: Union[List[str], Tuple[str]]):
-        """|coro|
-
-        Part the specified channels.
-
-        Parameters
-        ------------
-        channels: Union[List[str], Tuple[str]]
-            The channels in either a list or tuple form to part.
-        """
-        await self._ws.part_channels(*channels)
-
-    async def get_context(self, message, cls=None):
-        """|coro|
-
-        A function which creates context with the given message.
-        A custom context class can be passed.
-
-        Parameters
-        ------------
-        message: :class:`.Message`
-            The message to create context from.
-        cls: Optional[Type]
-            The optional custom class to create Context.
-
-        Returns
-        ---------
-        :class:`.Context`
-            The context created.
-        """
-        prefix = await self.get_prefix(message)
-
-        if not cls:
-            cls = Context
-
-        ctx = cls(message=message, channel=message.channel, user=message.author, prefix=prefix)
-        return ctx
-
-    async def _dispatch(self, event: str, *args, **kwargs):
-        await self._ws._dispatch(event, *args, **kwargs)
-
-    async def _handle_checks(self, ctx, no_global_checks=False):
-        command = ctx.command
-
-        if no_global_checks:
-            checks = [predicate for predicate in command._checks]
-        else:
-            checks = [predicate for predicate in itertools.chain(self._checks, command._checks)]
-
-        if not checks:
-            return True
-
-        for predicate in checks:
-            if inspect.iscoroutinefunction(predicate):
-                result = await predicate(ctx)
-            else:
-                result = predicate(ctx)
-            if not result:
-                return predicate
-
-            return result
-
-    async def handle_commands(self, message, ctx=None):
-        if ctx is None:
+        if hasattr(module, "breakdown"):
             try:
-                ctx = await self.get_context(message)
-            except Exception as e:
-                return await self.event_error(e, message.raw_data)
+                module.breakdown(self)  # type: ignore
+            except:
+                pass
 
-        if not ctx.prefix:
-            return
+        to_delete = [cog_name for cog_name, cog in self._cogs.items() if cog.__module__ == module.__name__]
+        for name in to_delete:
+            self.remove_cog(name)
 
-        content = message.content
-        content = content[len(ctx.prefix)::].lstrip(' ')
-        parsed = StringParser().process_string(content)
+        to_delete = [name for name, cmd in self._commands.items() if cmd._callback.__module__ == module.__name__]
+        for name in to_delete:
+            self.remove_command(name)
 
-        message.clean_content = ' '.join(parsed.values())
+        for m in list(sys.modules.keys()):
+            if m == module.__name__ or m.startswith(module.__name__ + "."):
+                del sys.modules[m]
+
+    def reload_module(self, name: str):
+        """Method which reloads a module and it's cogs.
+
+        Parameters
+        ----------
+        name: str
+            The name of the module to unload in dot.path format.
+
+
+        .. note::
+
+            This is roughly equivalent to `bot.unload_module(...)` then `bot.load_module(...)`.
+        """
+        if name not in self._modules:
+            raise ValueError(f"Module <{name}> is not loaded")
+
+        module = self._modules[name]
+
+        modules = {
+            name: m
+            for name, m in sys.modules.items()
+            if name == module.__name__ or name.startswith(module.__name__ + ".")
+        }
 
         try:
-            command = parsed.pop(0)
-        except KeyError:
-            return
-
-        try:
-            command = self._aliases[command]
-        except KeyError:
-            pass
-
-        try:
-            if command in self.commands:
-                command = self.commands[command]
-            elif command:
-                raise CommandNotFound(f'<{command}> was not found.')
-            else:
-                return
+            self.unload_module(name)
+            self.load_module(name)
         except Exception as e:
-            ctx.command = None
-            return await self.event_command_error(ctx, e)
+            sys.modules.update(modules)
+            module.prepare(self)  # type: ignore
+            raise
 
-        ctx.command = command
-        instance = ctx.command.instance
+    def add_cog(self, cog: Cog):
+        """Method which adds a cog to the bot.
 
-        try:
-            result = await self._handle_checks(ctx, command.no_global_checks)
-        except Exception as e:
-            return await self.event_command_error(ctx, e)
-        else:
-            if callable(result):
-                return await self.event_command_error(ctx, CheckFailure(f'The command <{command.name}> failed to invoke'
-                                                                        f' due to checks:: {result.__name__}'))
-            elif not result:
-                raise CheckFailure(f'The command <{command.name}> failed to invoke due to checks.')
+        Parameters
+        ----------
+        cog: :class:`Cog`
+            The cog instance to add to the bot.
 
-        try:
-            ctx.args, ctx.kwargs = await command.parse_args(instance, parsed)
 
-            await self.global_before_hook(ctx)
+        .. warning::
 
-            if ctx.command._before_invoke:
-                await ctx.command._before_invoke(instance, ctx)
+            This must be an instance of :class:`Cog`.
+        """
+        if not isinstance(cog, Cog):
+            raise InvalidCog('Cogs must derive from "commands.Cog".')
 
-            if instance:
-                await ctx.command._callback(instance, ctx, *ctx.args, **ctx.kwargs)
-            else:
-                await ctx.command._callback(ctx, *ctx.args, **ctx.kwargs)
-        except Exception as e:
-            if ctx.command.on_error:
-                await ctx.command.on_error(instance, ctx, e)
+        if cog.name in self._cogs:
+            raise InvalidCog(f'Cog "{cog.name}" has already been loaded.')
 
-            await self.event_command_error(ctx, e)
+        cog._load_methods(self)
+        self._cogs[cog.name] = cog
 
-        try:
-            # Invoke our after command hooks...
-            if command._after_invoke:
-                await ctx.command._after_invoke(ctx)
-            await self.global_after_hook(ctx)
-        except Exception as e:
-            await self.event_command_error(ctx, e)
+    def remove_cog(self, cog_name: str):
+        """Method which removes a cog from the bot.
+        Parameters
+        ----------
+        cog_name: str
+            The name of the cog to remove.
+        """
+        if cog_name not in self._cogs:
+            raise InvalidCog(f"Cog '{cog_name}' not found")
 
-    async def global_before_hook(self, ctx):
+        cog = self._cogs.pop(cog_name)
+        cog._unload_methods(self)
+
+    async def global_before_invoke(self, ctx):
         """|coro|
 
         Method which is called before any command is about to be invoked.
@@ -556,7 +466,7 @@ class Bot(Client):
         ----------
         .. code:: py
 
-            async def global_before_hook(self, ctx):
+            async def global_before_invoke(self, ctx):
                 # Make a database query for example to retrieve a specific token.
                 token = db_query()
 
@@ -567,11 +477,11 @@ class Bot(Client):
 
         Note
         ------
-            The global_before_hook is called before any other command specific hooks.
+            The global_before_invoke is called before any other command specific hooks.
         """
         pass
 
-    async def global_after_hook(self, ctx):
+    async def global_after_invoke(self, ctx: Context) -> None:
         """|coro|
 
         Method which is called after any command is invoked regardless if it failed or not.
@@ -585,187 +495,36 @@ class Bot(Client):
 
         Note
         ------
-            The global_after_hook is called after the command successfully invokes.
+            The global_after_invoke is called only after the command successfully invokes.
         """
         pass
 
-    async def event_webhook(self, data):
-        """|coro|
+    @property
+    def commands(self):
+        """The currently loaded commands."""
+        return self._commands
 
-        Event which is fired when a message from a Webhook subscription is received.
+    @property
+    def cogs(self) -> Mapping[str, Cog]:
+        """The currently loaded cogs."""
+        return self._cogs
 
-        Parameters
-        ------------
-        data: dict
-            The webhook data as JSON.
-
-        Warning
-        ---------
-            This event is only applicable when using the built in webhook server.
-        """
-        pass
-
-    async def event_raw_pubsub(self, data):
-        """|coro|
-
-        Event which fires when a PubSub subscription event is received.
-
-        Parameters
-        ------------
-        data:
-            The raw data received from the PubSub event.
-
-        Notes
-        -------
-        .. note::
-
-            No parsing is done on the JSON and thus the data will be raw.
-            A new event which parses the JSON will be released at a later date.
-        """
-        pass
-
-    async def event_pubsub(self, data):
-        raise NotImplementedError
-
-    async def pubsub_subscribe(self, token: str, *topics):
-        """|coro|
-
-        Method which sends a LISTEN event over PubSub. This subscribes you to the topics provided.
-
-        Parameters
-        ------------
-        token: str [Required]
-            The oAuth token to use to subscribe.
-        \*topics: Union[str] [Required]
-            The topics to subscribe to.
-
-        Raises
-        --------
-        WSConnectionFailure
-            The PubSub websocket failed to connect.
-        ClientError
-            You reached the maximum amount of PubSub connections/Subscriptions.
-
-        Returns
-        ---------
-        nonce: str
-            The nonce associated with this subscription. Useful for validating responses.
-        """
-        nonce = uuid.uuid4().hex
-
-        connection = await self._ws._pubsub_pool.delegate(*topics)
-        await connection.subscribe(token, nonce, *topics)
-
-        return nonce
-
-    async def event_command_error(self, ctx, error):
+    async def event_command_error(self, context: Context, error: Exception) -> None:
         """|coro|
 
         Event called when an error occurs during command invocation.
 
         Parameters
         ------------
-        ctx: :class:`.Context`
+        context: :class:`.Context`
             The command context.
         error: :class:`.Exception`
             The exception raised while trying to invoke the command.
         """
-        print('Ignoring exception in command: {0}:'.format(error), file=sys.stderr)
+        print(f"Ignoring exception in command: {error}:", file=sys.stderr)
         traceback.print_exception(type(error), error, error.__traceback__, file=sys.stderr)
 
-    async def event_mode(self, channel, user, status):
-        """|coro|
-
-        Event called when a MODE is received from Twitch.
-
-        Parameters
-        ------------
-        channel: :class:`.Channel`
-            Channel object relevant to the MODE event.
-        user: :class:`.User`
-            User object containing relevant information to the MODE.
-        status: str
-            The JTV status received by Twitch. Could be either o+ or o-.
-            Indicates a moderation promotion/demotion to the :class:`.User`
-        """
-        pass
-
-    async def event_userstate(self, user):
-        """|coro|
-
-        Event called when a USERSTATE is received from Twitch.
-
-        Parameters
-        ------------
-        user: :class:`.User`
-            User object containing relevant information to the USERSTATE.
-        """
-        pass
-
-    async def event_raw_usernotice(self, channel, tags: dict):
-        """|coro|
-
-        Event called when a USERNOTICE is received from Twitch.
-        Since USERNOTICE's can be fairly complex and vary, the following sub-events are available:
-
-            :meth:`event_usernotice_subscription` :
-            Called when a USERNOTICE Subscription or Re-subscription event is received.
-
-
-        .. seealso::
-
-            For more information on how to handle USERNOTICE's visit:
-            https://dev.twitch.tv/docs/irc/tags/#usernotice-twitch-tags
-
-
-        Parameters
-        ------------
-        channel: :class:`.Channel`	
-            Channel object relevant to the USERNOTICE event.
-        tags : dict
-            A dictionary with the relevant information associated with the USERNOTICE.
-            This could vary depending on the event.
-        """
-        pass
-
-    async def event_usernotice_subscription(self, metadata):
-        """|coro|
-
-        Event called when a USERNOTICE subscription or re-subscription event is received from Twitch.
-
-        Parameters
-        ------------
-        metadata: :class:`twitchio.dataclasses.NoticeSubscription`
-            The object containing various metadata about the subscription event.
-            For ease of use, this contains a :class:`.User` and :class:`.Channel`.
-        """
-        pass
-
-    async def event_part(self, user):
-        """|coro|
-
-        Event called when a PART is received from Twitch.
-
-        Parameters
-        ------------
-        user: :class:`.User`
-            User object containing relevant information to the PART.
-        """
-        pass
-
-    async def event_join(self, user):
-        """|coro|
-
-        Event called when a JOIN is received from Twitch.
-
-        Parameters
-        ------------
-        user: :class:`.User`
-            User object containing relevant information to the JOIN.
-        """
-        pass
-
-    async def event_message(self, message):
+    async def event_message(self, message: Message) -> None:
         """|coro|
 
         Event called when a PRIVMSG is received from Twitch.
@@ -775,82 +534,15 @@ class Bot(Client):
         message: :class:`.Message`
             Message object containing relevant information.
         """
+        if message.echo:
+            return
+
         await self.handle_commands(message)
 
-    async def event_error(self, error: Exception, data=None):
-        """|coro|
-
-        Event called when an error occurs while processing data.
-
-        Parameters
-        ------------
-        error: Exception
-            The exception raised.
-        data: str
-            The raw data received from Twitch. Depending on how this is called, this could be None.
-
-        Example
-        ---------
-        .. code:: py
-
-            @bot.event
-            async def event_error(error, data):
-                traceback.print_exception(type(error), error, error.__traceback__, file=sys.stderr)
-        """
-        traceback.print_exception(type(error), error, error.__traceback__, file=sys.stderr)
-
-    async def event_ready(self):
-        """|coro|
-
-        Event called when the Bot has logged in and is ready.
-
-        Example
-        ---------
-        .. code:: py
-
-            @bot.event
-            async def event_ready():
-                print(f'Logged into Twitch | {bot.nick}')
-        """
-        pass
-
-    async def event_raw_data(self, data):
-        """|coro|
-
-        Event called with the raw data received by Twitch.
-
-        Parameters
-        ------------
-        data: str
-            The raw data received from Twitch.
-
-        Example
-        ---------
-        .. code:: py
-
-            @bot.event
-            async def event_raw_data(data):
-                print(data)
-        """
-        pass
-
-    async def event_clearchat(self, notice):
-        """|coro|
-
-        Event called when the message in the chat be cleard.
-
-        Example
-        ---------
-        .. code:: py
-
-            @bot.event
-            async def event_clearchat(notice):
-                print(f'{notice.user.name}'s message has been cleard.')
-        """
-        pass
-
-    def command(self, *, name: str=None, aliases: Union[list, tuple]=None, cls=Command):
-        """Decorator which registers a command on the bot.
+    def command(
+        self, *, name: str = None, aliases: Union[list, tuple] = None, cls=Command, no_global_checks=False
+    ) -> Callable[[Callable], Command]:
+        """Decorator which registers a command with the bot.
 
         Commands must be a coroutine.
 
@@ -858,7 +550,7 @@ class Bot(Client):
         ------------
         name: str [Optional]
             The name of the command. By default if this is not supplied, the function name will be used.
-        aliases: Union[list, tuple] [Optional]
+        aliases: Optional[Union[list, tuple]]
             The command aliases. This must be a list or tuple.
         cls: class [Optional]
             The custom command class to override the default class. This must be similar to :class:`.Command`.
@@ -868,152 +560,41 @@ class Bot(Client):
         Raises
         --------
         TypeError
-            Cls is not a class.
+            cls is not type class.
         """
 
         if not inspect.isclass(cls):
-            raise TypeError(f'cls must be of type <class> not <{type(cls)}>')
+            raise TypeError(f"cls must be of type <class> not <{type(cls)}>")
 
-        def decorator(func):
+        def decorator(func: Callable):
             cmd_name = name or func.__name__
 
-            command = cls(name=cmd_name, func=func, aliases=aliases, instance=None)
-            self.add_command(command)
+            cmd = cls(name=cmd_name, func=func, aliases=aliases, instance=None, no_global_checks=no_global_checks)
+            self.add_command(cmd)
 
-            return command
+            return cmd
+
         return decorator
 
-    def event(self, func):
-        """Decorator which adds an event listener to the bot.
+    def group(
+        self, *, name: str = None, aliases: Union[list, tuple] = None, cls=Group, no_global_checks=False
+    ) -> Callable[[Callable], Group]:
+        if not inspect.isclass(cls):
+            raise TypeError(f"cls must be of type <class> not <{type(cls)}>")
 
-        Example
-        ---------
-        .. code:: py
+        def decorator(func: Callable):
+            cmd_name = name or func.__name__
 
-            @bot.event
-            async def event_raw_data(data):
-                print(data)
+            cmd = cls(name=cmd_name, func=func, aliases=aliases, instance=None, no_global_checks=no_global_checks)
+            self.add_command(cmd)
 
-            @bot.event
-            async def event_message(message):
-                print(message.content)
-                await bot.handle_commands(message)
-        """
-        if not inspect.iscoroutinefunction(func):
-            raise TypeError('Events must be coroutines.')
+            return cmd
 
-        setattr(self, func.__name__, func)
-        return func
+        return decorator
 
-    def check(self, func):
-        """A decorator that adds a global check to the bot.
+    def check(self, func: Callable[[Context], bool]) -> Callable:
+        if func in self._checks:
+            raise ValueError("The function is already registered as a bot check")
 
-        This decorator allows regular functions or coroutines to be added to the bot.
-        Global checks are ran before any other command specific checks.
-
-        As with all other checks, the check(predicate), must contain a sole parametere of Context.
-
-        Parameters
-        ------------
-        func : callable
-            A regular function or coroutine to add as a global check.
-
-        Examples
-        ----------
-        .. code::
-
-            @bot.check
-            async def my_global_check(self, ctx):
-                return ctx.author.is_mod
-        """
         self._checks.append(func)
         return func
-
-    def add_listener(self, func, name: str=None):
-        """Method which adds a coroutine as an extra listener.
-
-        This can be used to add extra event listeners to the bot.
-
-        Parameters
-        ------------
-        func: coro [Required]
-            The coroutine to assign as a listener.
-        name: str [Required]
-            The event to register. E.g "event_message".
-        """
-        if not inspect.iscoroutinefunction(func):
-            raise TypeError('Events must be coroutines.')
-
-        name = name or func.__name__
-
-        if name not in self.extra_listeners:
-            self.extra_listeners[name] = [func]
-        else:
-            self.extra_listeners[name].append(func)
-
-    def listen(self, event: str=None):
-        """Decorator which adds a coroutine as a listener to an event.
-
-        This can be used in place of :meth:`.event` or when more than one of the same event is required.
-
-        Parameters
-        ------------
-        event: str [Optional]
-            The event to listen to in the form of a string. E.g "event_message".
-
-        Example
-        ----------
-        .. code:: py
-
-            @bot.event()
-            async def event_message(message):
-            print(message.content)
-
-            @bot.listen("event_message")
-            async def extra_message(message):
-            print(message.content)
-        """
-        def wrapper(func):
-            self.add_listener(func, event)
-
-            return func
-        return wrapper
-
-    async def modify_webhook_subscription(self, *, callback=None, mode, topic, lease_seconds=0, secret=None):
-        """|coro|
-
-        Creates a webhook subscription.
-
-        Parameters
-        ----------
-        callback: Optional[str]
-            The URL which will be called to verify the subscripton and on callback.
-            If there's a webhook server running on the bot the callback will be automatically added.
-        mode: :class:`.WebhookMode`
-            Mode which describes whether the subscription should be created or not.
-        topic: :class:`.Topic`
-            Details about the subscription.
-        lease_seconds: Optional[int]
-            How many seconds the subscription should last. Defaults to 0, maximum is 846000.
-        secret: Optional[str]
-            A secret string which Twitch will use to add the `X-Hub-Signature` header to webhook requests.
-            You can use this to verify the POST request came from Twitch using `sha256(secret, body)`.
-
-        Raises
-        --------
-        Exception
-            No callback url was specified and there is no webhook server running to retrieve a callback url from.
-
-        HTTPException
-            Bad request while modifying the subscription.
-        """
-
-        if callback is None:
-            if self._webhook_server is None:
-                raise Exception('No callback passed and no webhook server running to retrieve a callback url from.')
-
-            callback = f'{self._webhook_server.external}:{self._webhook_server.port}/{self._webhook_server.callback}'
-
-        await super().modify_webhook_subscription(
-            callback=callback, mode=mode, topic=topic, lease_seconds=lease_seconds, secret=secret
-        )

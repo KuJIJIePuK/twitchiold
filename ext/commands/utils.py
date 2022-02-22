@@ -1,5 +1,3 @@
-# -*- coding: utf-8 -*-
-
 """
 The MIT License (MIT)
 
@@ -24,19 +22,27 @@ FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
 """
 
-__title__ = "TwitchIO"
-__author__ = "TwitchIO, PythonistaGuild"
-__license__ = "MIT"
-__copyright__ = "Copyright 2017-2021 (c) TwitchIO"
-__version__ = "2.1.5"
+from typing import Any, TypeVar, Optional
 
-from .client import Client
-from .user import *
-from .channel import Channel
-from .chatter import Chatter, PartialChatter
-from .enums import *
-from .errors import *
-from .message import Message
-from .models import *
-from .rewards import *
-from .utils import *
+K = TypeVar("K", bound=str)
+V = TypeVar("V")
+
+
+class _CaseInsensitiveDict(dict):
+    def __getitem__(self, key: K) -> V:
+        return super().__getitem__(key.lower())
+
+    def __setitem__(self, key: K, value: V) -> None:
+        super().__setitem__(key.lower(), value)
+
+    def __delitem__(self, key: K) -> None:
+        return super().__delitem__(key.lower())
+
+    def __contains__(self, key: K) -> bool:  # type: ignore
+        return super().__contains__(key.lower())
+
+    def get(self, key: K, default: Any = None) -> Optional[V]:
+        return super().get(key, default)
+
+    def pop(self, key: K, default: Any = None) -> V:
+        return super().pop(key, default)

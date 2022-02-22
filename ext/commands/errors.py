@@ -1,5 +1,3 @@
-# -*- coding: utf-8 -*-
-
 """
 The MIT License (MIT)
 
@@ -24,38 +22,47 @@ FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
 """
 
-__all__ = ('CommandError', 'CommandNotFound', 'MissingRequiredArgument', 'BadArgument', 'CheckFailure',)
 
+class TwitchCommandError(Exception):
+    """Base TwitchIO Command Error. All command errors derive from this error."""
 
-from twitchiold.errors import TwitchIOBException
-
-
-class CommandError(TwitchIOBException):
-    """Base Exception for errors raised by commands."""
     pass
 
 
-class CommandNotFound(CommandError):
-    """Exception raised when a command is not found."""
+class InvalidCogMethod(TwitchCommandError):
     pass
 
 
-class CheckFailure(CommandError):
-    """Exception raised when a check fails."""
+class InvalidCog(TwitchCommandError):
+    pass
 
 
-class MissingRequiredArgument(CommandError):
-    """Exception raised when a required argument is not passed to a command.
-
-    Attributes
-    ----------
-    param: :class:`inspect.Parameter`
-        The argument that is missing.
-    """
-    def __init__(self, param):
-        self.param = param
-        super().__init__(f'{param.name} is a required argument that is missing.')
+class MissingRequiredArgument(TwitchCommandError):
+    pass
 
 
-class BadArgument(CommandError):
-    """Exception raised when a bad argument is passed to a command."""
+class BadArgument(TwitchCommandError):
+    def __init__(self, message: str):
+        self.message = message
+        super().__init__(message)
+
+
+class ArgumentParsingFailed(BadArgument):
+    def __init__(self, message: str, original: Exception):
+        self.original = original
+        super().__init__(message)
+
+
+class CommandNotFound(TwitchCommandError):
+    pass
+
+
+class CommandOnCooldown(TwitchCommandError):
+    def __init__(self, command, retry_after):
+        self.command = command
+        self.retry_after = retry_after
+        super().__init__(f"Command <{command.name}> is on cooldown. Try again in ({retry_after:.2f})s")
+
+
+class CheckFailure(TwitchCommandError):
+    pass
