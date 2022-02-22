@@ -1,5 +1,3 @@
-# -*- coding: utf-8 -*-
-
 """
 The MIT License (MIT)
 
@@ -24,43 +22,36 @@ FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
 """
 
-__all__ = (
-    'TwitchIOBException',
-    'AuthenticationError',
-    'WSConnectionFailure',
-    'ClientError',
-    'InvalidContent',
-    'HTTPException',
-    'Unauthorized',
-)
 
-
-class TwitchIOBException(Exception):
-    """Base exception class for TwitchIO."""
-
-
-class AuthenticationError(TwitchIOBException):
-    """Authentication error."""
-
-
-class WSConnectionFailure(TwitchIOBException):
-    """Exception raised when WS fails to connect."""
-
-
-class ClientError(TwitchIOBException):
+class TwitchIOException(Exception):
     pass
 
 
-class InvalidContent(TwitchIOBException):
+class AuthenticationError(TwitchIOException):
     pass
 
 
-class HTTPException(TwitchIOBException):
+class InvalidContent(TwitchIOException):
     pass
 
 
-class EchoMessageWarning(TwitchIOBException):
-    """Exception raised when a bot user tries to repsond to it's own message."""
+class IRCCooldownError(TwitchIOException):
+    pass
+
+
+class EchoMessageWarning(TwitchIOException):
+    pass
+
+
+class NoClientID(TwitchIOException):
+    pass
+
+
+class NoToken(TwitchIOException):
+    pass
+
+
+class HTTPException(TwitchIOException):
     pass
 
 

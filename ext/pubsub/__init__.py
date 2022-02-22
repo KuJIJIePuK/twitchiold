@@ -1,5 +1,3 @@
-# -*- coding: utf-8 -*-
-
 """
 The MIT License (MIT)
 
@@ -24,19 +22,7 @@ FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
 """
 
-__title__ = "TwitchIO"
-__author__ = "TwitchIO, PythonistaGuild"
-__license__ = "MIT"
-__copyright__ = "Copyright 2017-2021 (c) TwitchIO"
-__version__ = "2.1.5"
-
-from .client import Client
-from .user import *
-from .channel import Channel
-from .chatter import Chatter, PartialChatter
-from .enums import *
-from .errors import *
-from .message import Message
+from .topics import *
+from .websocket import *
+from .pool import *
 from .models import *
-from .rewards import *
-from .utils import *

@@ -23,8 +23,8 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
 FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
 """
-
-from collections import OrderedDict
+from __future__ import annotations
+from typing import Dict
 
 
 class StringParser:
@@ -33,24 +33,24 @@ class StringParser:
         self.index = 0
         self.eof = 0
         self.start = 0
-        self.words = OrderedDict()
+        self.words: Dict[int, str] = {}
         self.ignore = False
 
-    def process_string(self, msg: str):
+    def process_string(self, msg: str) -> Dict[int, str]:
 
         while True:
             try:
                 loc = msg[self.count]
             except IndexError:
                 self.eof = self.count
-                word = msg[self.start:self.eof]
+                word = msg[self.start : self.eof]
                 if not word:
                     break
-                self.words[self.index] = msg[self.start:self.eof]
+                self.words[self.index] = msg[self.start : self.eof]
                 break
 
             if loc.isspace() and not self.ignore:
-                self.words[self.index] = msg[self.start:self.count].replace(' ', '', 1)
+                self.words[self.index] = msg[self.start : self.count].replace(" ", "", 1)
                 self.index += 1
                 self.start = self.count + 1
 
@@ -59,7 +59,7 @@ class StringParser:
                     self.start = self.count + 1
                     self.ignore = True
                 else:
-                    self.words[self.index] = msg[self.start:self.count]
+                    self.words[self.index] = msg[self.start : self.count]
                     self.index += 1
                     self.count += 1
                     self.start = self.count
@@ -67,3 +67,12 @@ class StringParser:
 
             self.count += 1
         return self.words
+
+    def copy(self) -> StringParser:
+        new = self.__class__()
+        new.count = self.count
+        new.start = self.start
+        new.words = self.words.copy()
+        new.index = self.index
+        new.ignore = self.ignore
+        return new
