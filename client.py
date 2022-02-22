@@ -607,7 +607,21 @@ class Client:
             languages=languages,
             token=token,
         )
-        return [Stream(self._http, x) for x in data]
+        # print(data)
+        # return [Stream(self._http, x) for x in data]
+        li = {}
+        for name in data:
+            d = {}
+            d['name'] = name['user_login']
+            d['viewers'] = name['viewer_count']
+            d['title'] = name['title']
+            d['type'] = name['type']
+            d['game'] = name['game_name']
+            d['matur'] = name['is_mature']
+            li[name['id']] = d
+        # return data
+        # print(li)
+        return li
 
     async def fetch_teams(
         self,

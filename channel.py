@@ -54,7 +54,8 @@ class Channel(Messageable):
         return hash(self.name)
 
     def __repr__(self):
-        return f"<Channel name: {self.name}>"
+        return f"{self.name}"
+        # return f"<Channel name: {self.name}>"
 
     def _fetch_channel(self):
         return self  # Abstract method

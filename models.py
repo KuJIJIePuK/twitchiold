@@ -572,7 +572,16 @@ class Stream:
         self.is_mature: bool = data["is_mature"]
 
     def __repr__(self):
-        return f"<Stream id={self.id} user={self.user} title={self.title} started_at={self.started_at}>"
+        d = {}
+        d[self.user.name] = self.viewer_count
+        d['title'] = self.title
+        d['type'] = self.type
+        d['game'] = self.game_name
+        d['matur'] = self.is_mature
+        d['ud'] = self.id
+        return d
+        # print(d)
+        # return f"<user={self.user} viewers={self.viewer_count} title={self.title} game={self.game_name} started_at={self.started_at} stream id={self.id}>"
 
 
 class ChannelInfo:

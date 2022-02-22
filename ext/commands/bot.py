@@ -59,6 +59,7 @@ class Bot(Client):
         super().__init__(
             token=token, client_secret=client_secret, initial_channels=initial_channels, heartbeat=heartbeat
         )
+        # print(initial_channels)
 
         self._prefix = prefix
 

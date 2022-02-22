@@ -46,7 +46,8 @@ class PartialChatter(Messageable):
         self._message = kwargs.get("message")
 
     def __repr__(self):
-        return f"<PartialChatter name: {self._name}, channel: {self._channel}>"
+        return f"{self._name}"
+        # return f"<PartialChatter name: {self._name}, channel: {self._channel}>"
 
     def __eq__(self, other):
         return other.name == self.name and other.channel.name == other.channel.name
@@ -99,6 +100,7 @@ class Chatter(PartialChatter):
         "_ws",
         "id",
         "_turbo",
+        "_vip",
         "_sub",
         "_mod",
         "_display_name",
@@ -118,6 +120,7 @@ class Chatter(PartialChatter):
             self.id = None
             self._badges = None
             self._turbo = None
+            self._vip = None
             self._sub = None
             self._mod = None
             self._display_name = None
@@ -127,6 +130,7 @@ class Chatter(PartialChatter):
         self.id = self._tags.get("user-id")
         self._badges = self._tags.get("badges")
         self._turbo = self._tags.get("turbo")
+        self._vip = self._tags.get("vip")
         self._sub = int(self._tags["subscriber"])
         self._mod = int(self._tags["mod"])
         self._display_name = self._tags["display-name"]
@@ -194,6 +198,10 @@ class Chatter(PartialChatter):
         Could be None if no Tags were received.
         """
         return self._turbo
+
+    @property
+    def is_vip(self) -> Optional[bool]:
+        return self._vip
 
     @property
     def is_subscriber(self) -> bool:

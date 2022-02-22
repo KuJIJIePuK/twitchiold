@@ -24,6 +24,7 @@ DEALINGS IN THE SOFTWARE.
 
 import abc
 import time
+from asyncio import sleep
 
 from .cooldowns import RateBucket
 from .errors import *
@@ -95,7 +96,6 @@ class Messageable(abc.ABC):
     async def send(self, content: str):
         """|coro|
 
-
         Send a message to the destination associated with the dataclass.
 
         Destination will either be a channel or user.
@@ -125,6 +125,79 @@ class Messageable(abc.ABC):
             await ws.send(f"PRIVMSG #{name} :{content}\r\n")
         else:
             await ws.send(f"PRIVMSG #jtv :/w {entity.name} {content}\r\n")
+
+    async def followers(self, time = 0, delay = 0):
+        await sleep(delay)
+        await self.send(f'.followers {time}')
+
+    async def followersoff(self, delay = 0):
+        await sleep(delay)
+        await self.send(f'.followersoff')
+
+    async def ban(self, user = '', reason = '', delay = 0):
+        await sleep(delay)
+        if not reason.startswith(' '):
+            reason = f' {reason}'
+        await self.send(f'.ban {user}{reason}')
+
+    async def unban(self, user = '', delay = 0):
+        await sleep(delay)
+        await self.send(f'.unban {user}')
+
+    async def timeout(self, user = '', time = 0, reason = '',delay = 0):
+        await sleep(delay)
+        if not reason.startswith(' '):
+            reason = f' {reason}'
+        await self.send(f'.timeout {user} {time}{reason}')
+
+    async def untimeout(self, user = '', delay = 0):
+        await sleep(delay)
+        await self.send(f'.untimeout {user}')
+
+    async def delete(self, m_id = '', delay = 0):
+        await sleep(delay)
+        await self.send(f'.delete {m_id}')
+
+    async def me(self, content = '', delay = 0):
+        await sleep(delay)
+        await self.send(f'.me {content}')
+
+    async def clear(self, delay = 0):
+        await sleep(delay)
+        await self.send(f'.clear')
+
+    async def emoteonly(self, delay = 0):
+        await sleep(delay)
+        await self.send(f'.emoteonly')
+
+    async def emoteonlyoff(self, delay = 0):
+        await sleep(delay)
+        await self.send(f'.emoteonlyoff')
+
+    async def r9kbeta(self, delay = 0):
+        await sleep(delay)
+        await self.send(f'.r9kbeta')
+
+    async def r9kbetaoff(self, delay = 0):
+        await sleep(delay)
+        await self.send(f'.r9kbetaoff')
+
+    async def slow(self, time = 0, delay = 0):
+        await sleep(delay)
+        await self.send(f'.slow {time}')
+
+    async def slowoff(self, delay = 0):
+        await sleep(delay)
+        await self.send(f'.slowoff')
+
+    async def subscribers(self, delay = 0):
+        await sleep(delay)
+        await self.send(f'.subscribers')
+
+    async def subscribersoff(self, delay = 0):
+        await sleep(delay)
+        await self.send(f'.subscribersoff')
+
 
     async def reply(self, content: str):
         """|coro|

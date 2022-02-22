@@ -33,12 +33,14 @@ if TYPE_CHECKING:
 
 class Message:
 
-    __slots__ = ("_raw_data", "content", "_author", "echo", "_timestamp", "_channel", "_tags", "_id")
+    __slots__ = ("_raw_data", "content", "_author", "echo", "_timestamp", "_channel", "_tags", "_id", "_reward_id", "_display_name")
 
     def __init__(self, **kwargs):
         self._raw_data = kwargs.get("raw_data")
         self.content = kwargs.get("content")
         self._author = kwargs.get("author")
+        self._display_name = kwargs.get("display-name")
+        # print(kwargs)
         self._channel = kwargs.get("channel")
         self._tags = kwargs.get("tags")
         self.echo = kwargs.get("echo", False)
@@ -49,11 +51,25 @@ class Message:
         except KeyError:
             self._id = None
             self._timestamp = time.time()
+        try:
+            self._reward_id = self._tags["custom-reward-id"]
+        except:
+            self._reward_id = 'Empty'
 
     @property
     def id(self) -> str:
         """The Message ID."""
         return self._id
+
+    @property
+    def display_name(self) -> str:
+        """The Message ID."""
+        return self._display_name
+
+    @property
+    def reward_id(self) -> str:
+        """The Message reward."""
+        return self._reward_id
 
     @property
     def author(self) -> Union["Chatter", "PartialChatter"]:

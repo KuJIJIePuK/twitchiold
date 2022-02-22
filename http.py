@@ -66,7 +66,7 @@ class Route:
         self.query = query
 
         if token:
-            self.headers["Authorization"] = "Bearer " + token
+            self.headers["Authorization"] = "Bearer " + token.replace('oauth:', '')
 
         if isinstance(path, URL):
             self.path = path
@@ -81,6 +81,7 @@ class Route:
             self.headers["Content-Type"] = "application/json"
         else:
             self.body = body
+        # print(self.headers)
 
 
 class TwitchHTTP:
@@ -746,8 +747,18 @@ class TwitchHTTP:
         if languages:
             for l in languages:
                 q.append(("language", l))
-
-        return await self.request(Route("GET", "streams", query=q, token=token))
+        # print(len(q))
+        di = []
+        while len(q) > 100:
+            de = await self.request(Route("GET", "streams", query=q[:100], token=token))
+            # print(de)
+            di+= de
+            # print(di)
+            q = q[100:]
+        de = await self.request(Route("GET", "streams", query=q, token=token))
+        # print(de)
+        di+= de
+        return di
 
     async def post_stream_marker(self, token: str, user_id: str, description: str = None):
         return await self.request(

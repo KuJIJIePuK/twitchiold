@@ -112,7 +112,7 @@ class WSConnection:
         return self._websocket is not None and not self._websocket.closed
 
     async def wait_until_ready(self):
-        await self.is_ready.wait()
+        await self._connection.wait_until_ready()
 
     async def _connect(self):
         """Attempt to connect to Twitch's Websocket."""
@@ -186,17 +186,19 @@ class WSConnection:
         elif exc:
             asyncio.create_task(self.event_error(exc, data))
 
-    async def send(self, message: str):
+    async def send(self, message: str, channel = ''):
         message = message.strip()
         log.debug(f" > {message}")
 
         if message.startswith("PRIVMSG #"):
             data = message.replace("PRIVMSG #", "", 1).split(" ")
-            channel = data.pop(0)
+            if channel == '':
+                channel = data.pop(0)
             content = " ".join(data)
+            # print(content)
 
             dummy = f"> :{self.nick}!{self.nick}@{self.nick}.tmi.twitch.tv PRIVMSG(ECHO) #{channel} {content}\r\n"
-
+            # print(dummy)
             task = asyncio.create_task(self._process_data(dummy))
             task.add_done_callback(partial(self._task_callback, dummy))  # Process our raw data
 
@@ -244,8 +246,8 @@ class WSConnection:
         if not channels and not self._initial_channels:
             return
 
-        channels = channels or self._initial_channels
-        await self.join_channels(*channels)
+        # channels = channels or self._initial_channels
+        # await self.join_channels(*channels)
 
     async def join_channels(self, *channels: str):
         """|coro|
@@ -257,31 +259,91 @@ class WSConnection:
         *channels : str
             An argument list of channels to attempt joining.
         """
-        async with self._join_lock:  # acquire a lock, allowing only one join_channels at once...
-            for channel in channels:
-                if self._join_handle < time.time():  # Handle is less than the current time
-                    self._join_tick = 20  # So lets start a new rate limit bucket..
-                    self._join_handle = time.time() + 10  # Set the handle timeout time
+        
+        if len(channels) > 19:
+            i = 0
+            while i<len(channels):
+                if i+19<len(channels):
+                    ch = channels[i:i+19]
+                else:
+                    ch = channels[i:]
+                # print(len(ch), ch)
+                await asyncio.gather(*[self._join_channel(x) for x in ch])
+                # for x in ch:
+                #     await self._join_channel(x)
+                # await asyncio.gather(*[self._join_channel(x) for x in ch])
+                i+= 19
+                await asyncio.sleep(11)
+        else:
+            # print(len(channels), channels)
+            await asyncio.gather(*[self._join_channel(x) for x in channels])
+            # for x in channels:
+                # asyncio.create_task(self._join_channel(x))
+            # asyncio.create_task(*[self._join_channel(x) for x in channels])
+            # await asyncio.gather(*[self._join_channel(x) for x in channels])
 
-                if self._join_tick == 0:  # We have exhausted the bucket, wait so we can make a new one...
-                    await asyncio.sleep(self._join_handle - time.time())
-                    continue
+        # async with self._join_lock:  # acquire a lock, allowing only one join_channels at once...
+        #     for channel in channels:
+        #         print(channel, channels)
+        #         if self._join_handle < time.time():  # Handle is less than the current time
+        #             self._join_tick = 20  # So lets start a new rate limit bucket..
+        #             self._join_handle = time.time() + 10  # Set the handle timeout time
 
-                asyncio.create_task(self._join_channel(channel))
-                self._join_tick -= 1
+        #         if self._join_tick == 0:  # We have exhausted the bucket, wait so we can make a new one...
+        #             await asyncio.sleep(self._join_handle - time.time())
+        #             continue
+
+        #         asyncio.create_task(self._join_channel(channel))
+        #         self._join_tick -= 1
 
     async def _join_channel(self, entry):
+        # channel = re.sub('[#\s]', '', entry).lower()
+        # await self.send(f'JOIN #{channel}\r\n')
+
+        # self._join_pending[channel] = fut = self._loop.create_future()
+
+        # try:
+        #     await asyncio.wait_for(fut, timeout=10)
+        # except asyncio.TimeoutError:
+        #     self._join_pending.pop(channel)
+
+        #     # raise asyncio.TimeoutError(
+        #     #     f'Request to join the "{channel}" channel has timed out. Make sure the channel exists.')
+        # m = f'Невозможно подключиться к {channel}, возможно неверный никнейм!'
+        # with open('BUG.log', 'a', encoding='utf8') as inp:
+        #     inp.write(m+'\n')
+        # print(m)
+        # return m
         channel = re.sub("[#]", "", entry).lower()
         await self.send(f"JOIN #{channel}\r\n")
+        # print(f'join to {channel} {time.strftime("%H:%M:%S", time.localtime())}')
 
         self._join_pending[channel] = fut = self._loop.create_future()
-        asyncio.create_task(self._join_future_handle(fut, channel))
+
+        try:
+            await asyncio.wait_for(fut, timeout=2)
+        except asyncio.TimeoutError:
+            self._join_pending.pop(channel)
+            log.error(f'The channel "{channel}" was unable to be joined. Check the channel is valid.')
+            m = f'Невозможно подключиться к {channel}, возможно неверный никнейм!'
+            with open('BUG.log', 'a', encoding='utf8') as inp:
+                inp.write(m+'\n')
+            # print(m)
+            return m
+        return f'Подключено к {channel}'
+
+        # print(fut)
+        # asyncio.create_task(self._join_future_handle(fut, channel))
 
     async def _join_future_handle(self, fut: asyncio.Future, channel: str):
         try:
-            await asyncio.wait_for(fut, timeout=10)
+            await asyncio.wait_for(fut, timeout=2)
         except asyncio.TimeoutError:
             log.error(f'The channel "{channel}" was unable to be joined. Check the channel is valid.')
+            m = f'Невозможно подключиться к {channel}, возможно неверный никнейм!'
+            with open('BUG.log', 'a', encoding='utf8') as inp:
+                inp.write(m+'\n')
+            # print(m)
             self._join_pending.pop(channel)
 
             data = (
@@ -290,6 +352,7 @@ class WSConnection:
             )
 
             await self._process_data(data)
+            # return m
 
     async def _process_data(self, data: str):
         data = data.rstrip()
